@@ -1,8 +1,14 @@
 import AppKit
 import Foundation
+import OSLog
 import PureVoiceCore
 import SwiftUI
 import UserNotifications
+
+private let pipelineLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "com.adrian.purevoice",
+    category: "Pipeline"
+)
 
 enum RecordingStatus: Equatable {
     case idle
@@ -10,8 +16,20 @@ enum RecordingStatus: Equatable {
     case processing
     case pastedToField
     case copiedToClipboard
+    case copiedRawTranscript
     case retrying(attempt: Int)
     case modelUnavailable
+}
+
+private enum OutputDeliveryError: LocalizedError {
+    case clipboardUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .clipboardUnavailable:
+            return "Pure Voice could not write the output to the clipboard."
+        }
+    }
 }
 
 @MainActor
@@ -334,22 +352,28 @@ final class AppState: ObservableObject {
         let overallStart = Date()
         stage = .transcribing
         recordingStatus = .processing
+        var fallbackSTTResult: STTResult?
 
         do {
             guard let sttClient else {
                 throw STTHelperError.helperMissing("stt_helper.py")
             }
 
+            pipelineLogger.info("Pipeline transcribe started using \(self.selectedSTTEngine.rawValue, privacy: .public)")
             let sttResult = try await sttClient.transcribe(
                 audioURL: audioURL,
                 engine: selectedSTTEngine,
                 model: nil
             )
+            fallbackSTTResult = sttResult
             transcriptPreview = sttResult.rawText
+            let rawCopied = pasteService.copyToPasteboard(sttResult.rawText)
+            pipelineLogger.info("Pipeline transcription complete, chars=\(sttResult.rawText.count, privacy: .public), rawClipboardFallback=\(rawCopied, privacy: .public)")
 
             stage = .polishing
             let polishStart = Date()
             let key = try requireAPIKey()
+            pipelineLogger.info("Pipeline polishing started with model=\(self.selectedModelID, privacy: .public)")
             let polished = try await polishWithSingleRetry(
                 transcript: sttResult.rawText,
                 persona: selectedPersona,
@@ -358,11 +382,18 @@ final class AppState: ObservableObject {
             )
             let polishingLatency = Int(Date().timeIntervalSince(polishStart) * 1000)
             polishedPreview = polished
+            pipelineLogger.info("Pipeline polishing complete, chars=\(polished.count, privacy: .public), latencyMs=\(polishingLatency, privacy: .public)")
 
             let pasteStatus = pasteService.pasteOrCopy(polished, originalTarget: originalTarget)
+            guard pasteStatus != .failed else {
+                _ = pasteService.copyToPasteboard(sttResult.rawText)
+                throw OutputDeliveryError.clipboardUnavailable
+            }
+
             lastPasteStatus = pasteStatus
             stage = pasteStatus == .pasted ? .pasted : .copied
             recordingStatus = pasteStatus == .pasted ? .pastedToField : .copiedToClipboard
+            pipelineLogger.info("Pipeline delivered output with status=\(pasteStatus.rawValue, privacy: .public)")
 
             if saveHistory {
                 let record = TranscriptRecord(
@@ -378,12 +409,72 @@ final class AppState: ObservableObject {
                     endToEndLatencyMs: Int(Date().timeIntervalSince(overallStart) * 1000),
                     pasteStatus: pasteStatus
                 )
-                try store?.insertTranscript(record)
+                saveTranscriptRecord(record)
             }
 
             try? FileManager.default.removeItem(at: audioURL)
         } catch {
-            fail(error)
+            pipelineLogger.error("Pipeline failed: \(error.localizedDescription, privacy: .public)")
+            if let fallbackSTTResult {
+                deliverRawTranscriptFallback(
+                    fallbackSTTResult,
+                    audioURL: audioURL,
+                    overallStart: overallStart,
+                    error: error
+                )
+            } else {
+                fail(error)
+            }
+        }
+    }
+
+    private func deliverRawTranscriptFallback(
+        _ sttResult: STTResult,
+        audioURL: URL,
+        overallStart: Date,
+        error: Error
+    ) {
+        let copied = pasteService.copyToPasteboard(sttResult.rawText)
+        transcriptPreview = sttResult.rawText
+        polishedPreview = sttResult.rawText
+        lastPasteStatus = copied ? .copied : .failed
+
+        if copied {
+            errorMessage = "Polishing failed, so the raw transcript was copied instead: \(error.localizedDescription)"
+            stage = .copied
+            recordingStatus = .copiedRawTranscript
+            pipelineLogger.info("Pipeline copied raw transcript fallback, chars=\(sttResult.rawText.count, privacy: .public)")
+
+            if saveHistory {
+                let record = TranscriptRecord(
+                    rawText: sttResult.rawText,
+                    polishedText: sttResult.rawText,
+                    personaID: selectedPersona.id,
+                    sttEngine: sttResult.engine,
+                    sttModel: sttResult.model,
+                    llmEndpointURL: endpointURLString,
+                    llmModel: selectedModelID,
+                    transcriptionLatencyMs: sttResult.latencyMs,
+                    polishingLatencyMs: 0,
+                    endToEndLatencyMs: Int(Date().timeIntervalSince(overallStart) * 1000),
+                    pasteStatus: .copied,
+                    errorMessage: error.localizedDescription
+                )
+                saveTranscriptRecord(record)
+            }
+
+            try? FileManager.default.removeItem(at: audioURL)
+        } else {
+            failMessage("Polishing failed, and Pure Voice could not write the raw transcript to the clipboard: \(error.localizedDescription)")
+        }
+    }
+
+    private func saveTranscriptRecord(_ record: TranscriptRecord) {
+        do {
+            try store?.insertTranscript(record)
+        } catch {
+            pipelineLogger.error("Transcript history save failed: \(error.localizedDescription, privacy: .public)")
+            errorMessage = "Output copied, but history could not be saved: \(error.localizedDescription)"
         }
     }
 
@@ -539,11 +630,11 @@ final class AppState: ObservableObject {
         switch newStatus {
         case .idle:
             recordingStatusPanel?.orderOut(nil)
-        case .recording, .processing, .retrying, .modelUnavailable, .pastedToField, .copiedToClipboard:
+        case .recording, .processing, .retrying, .modelUnavailable, .pastedToField, .copiedToClipboard, .copiedRawTranscript:
             showRecordingStatusPanelIfNeeded(allowsUserDismissal: newStatus == .modelUnavailable)
             recordingStatusPanel?.reposition()
 
-            if newStatus == .pastedToField || newStatus == .copiedToClipboard {
+            if newStatus == .pastedToField || newStatus == .copiedToClipboard || newStatus == .copiedRawTranscript {
                 recordingStatusDismissTask = Task { [weak self] in
                     try? await Task.sleep(for: .seconds(2))
                     await MainActor.run {

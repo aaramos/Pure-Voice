@@ -76,7 +76,7 @@ struct StatusModalView: View {
                 .frame(width: 14, height: 14)
         case .pastedToField:
             Image(systemName: "checkmark.circle.fill")
-        case .copiedToClipboard:
+        case .copiedToClipboard, .copiedRawTranscript:
             Image(systemName: "doc.on.doc.fill")
         case .retrying:
             Image(systemName: "exclamationmark.triangle.fill")
@@ -99,6 +99,8 @@ struct StatusModalView: View {
             return "Pasted into field"
         case .copiedToClipboard:
             return "Copied to clipboard"
+        case .copiedRawTranscript:
+            return "Copied raw transcript"
         case .retrying:
             return "Model not ready — retrying…"
         case .modelUnavailable:
@@ -110,6 +112,8 @@ struct StatusModalView: View {
         switch state.recordingStatus {
         case .pastedToField, .copiedToClipboard:
             return "Dismisses in 2s"
+        case .copiedRawTranscript:
+            return "Polishing failed; dismisses in 2s"
         case .retrying(let attempt):
             return "Retry \(attempt) of 2"
         case .modelUnavailable:
@@ -127,7 +131,7 @@ struct StatusModalView: View {
             return colorScheme == .dark ? Color(hex: 0xF59E0B).opacity(0.24) : Color(hex: 0xFFFBEB)
         case .pastedToField:
             return colorScheme == .dark ? Color(hex: 0x65A30D).opacity(0.24) : Color(hex: 0xF0FDF4)
-        case .copiedToClipboard:
+        case .copiedToClipboard, .copiedRawTranscript:
             return colorScheme == .dark ? Color(hex: 0x2563EB).opacity(0.24) : Color(hex: 0xEFF6FF)
         case .retrying, .modelUnavailable:
             return colorScheme == .dark ? Color(hex: 0xEF4444).opacity(0.24) : Color(hex: 0xFEF2F2)
@@ -144,7 +148,7 @@ struct StatusModalView: View {
             return colorScheme == .dark ? Color(hex: 0xFAC775) : Color(hex: 0x92400E)
         case .pastedToField:
             return colorScheme == .dark ? Color(hex: 0x97C459) : Color(hex: 0x166534)
-        case .copiedToClipboard:
+        case .copiedToClipboard, .copiedRawTranscript:
             return colorScheme == .dark ? Color(hex: 0x85B7EB) : Color(hex: 0x1D4ED8)
         case .retrying, .modelUnavailable:
             return colorScheme == .dark ? Color(hex: 0xF09595) : Color(hex: 0x991B1B)

@@ -32,7 +32,7 @@ struct WaveformView: View {
         switch status {
         case .recording, .processing:
             return paddedLevels.map { min(52, max(4, $0)) }
-        case .idle, .pastedToField, .copiedToClipboard, .retrying, .modelUnavailable:
+        case .idle, .pastedToField, .copiedToClipboard, .copiedRawTranscript, .retrying, .modelUnavailable:
             return Array(repeating: 4, count: 38)
         }
     }
@@ -47,7 +47,7 @@ struct WaveformView: View {
         switch status {
         case .recording, .processing:
             return Color(hex: 0xA78BFA)
-        case .idle, .pastedToField, .copiedToClipboard, .retrying, .modelUnavailable:
+        case .idle, .pastedToField, .copiedToClipboard, .copiedRawTranscript, .retrying, .modelUnavailable:
             return Color(nsColor: .secondaryLabelColor)
         }
     }
@@ -59,7 +59,7 @@ struct WaveformView: View {
             return pulse ? 0.36 + Double(index % 7) * 0.045 : 1
         case .processing:
             return 0.38
-        case .idle, .pastedToField, .copiedToClipboard, .retrying, .modelUnavailable:
+        case .idle, .pastedToField, .copiedToClipboard, .copiedRawTranscript, .retrying, .modelUnavailable:
             return 0.10
         }
     }

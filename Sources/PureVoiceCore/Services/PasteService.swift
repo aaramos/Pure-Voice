@@ -21,7 +21,9 @@ public final class PasteService: @unchecked Sendable {
     }
 
     public func pasteOrCopy(_ text: String, originalTarget: FocusTarget?) -> PasteStatus {
-        copyToPasteboard(text)
+        guard copyToPasteboard(text) else {
+            return .failed
+        }
 
         let accessibilityAllowed = hasAccessibilityPermission(prompt: false)
         guard
@@ -43,9 +45,20 @@ public final class PasteService: @unchecked Sendable {
         return .pasted
     }
 
-    public func copyToPasteboard(_ text: String) {
+    @discardableResult
+    public func copyToPasteboard(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+
         let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        for _ in 0..<3 {
+            pasteboard.clearContents()
+            if pasteboard.setString(text, forType: .string),
+               pasteboard.string(forType: .string) == text {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.03)
+        }
+
+        return false
     }
 }
