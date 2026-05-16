@@ -167,7 +167,7 @@ final class AppState: ObservableObject {
         case .pasted:
             return "Pure Voice pasted this into the app that was active when recording started."
         case .copied:
-            return "The text is on the clipboard. Press Command+V in the target app to paste it."
+            return "Pure Voice copied this because it could not confirm paste access to the target app. Press Command+V there, or enable Pure Voice in Accessibility if you want automatic paste."
         case .failed:
             return "Pure Voice kept the text here. Use Copy Again, then paste it manually."
         case nil:
