@@ -143,7 +143,7 @@ final class AppState: ObservableObject {
             }
         )
 
-        _ = pasteService.hasAccessibilityPermission(prompt: true)
+        _ = pasteService.hasAccessibilityPermission(prompt: false)
         await refreshHealth()
         if apiKeyPresent {
             await refreshModels(setsErrorStageOnFailure: false)
@@ -540,7 +540,7 @@ final class AppState: ObservableObject {
         case .idle:
             recordingStatusPanel?.orderOut(nil)
         case .recording, .processing, .retrying, .modelUnavailable, .pastedToField, .copiedToClipboard:
-            showRecordingStatusPanelIfNeeded()
+            showRecordingStatusPanelIfNeeded(allowsUserDismissal: newStatus == .modelUnavailable)
             recordingStatusPanel?.reposition()
 
             if newStatus == .pastedToField || newStatus == .copiedToClipboard {
@@ -555,7 +555,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func showRecordingStatusPanelIfNeeded() {
+    private func showRecordingStatusPanelIfNeeded(allowsUserDismissal: Bool) {
         if recordingStatusPanel == nil {
             recordingStatusPanel = RecordingStatusPanel(state: self) { [weak self] in
                 guard let self, self.recordingStatus == .modelUnavailable else { return }
@@ -563,7 +563,7 @@ final class AppState: ObservableObject {
             }
         }
 
-        recordingStatusPanel?.show()
+        recordingStatusPanel?.show(allowsUserDismissal: allowsUserDismissal)
     }
 
     func openSettings() {

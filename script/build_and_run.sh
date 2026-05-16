@@ -8,6 +8,7 @@ ICON_NAME="PureVoice"
 BUNDLE_ID="com.adrian.purevoice"
 MIN_SYSTEM_VERSION="14.0"
 CONFIGURATION="${CONFIGURATION:-debug}"
+CODE_SIGN_IDENTITY="${PUREVOICE_CODESIGN_IDENTITY:-Pure Voice Local Development}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -72,7 +73,12 @@ cat >"$INFO_PLIST" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - "$APP_BUNDLE" >/dev/null
+if security find-identity -p codesigning -v 2>/dev/null | grep -Fq "\"$CODE_SIGN_IDENTITY\""; then
+  codesign --force --sign "$CODE_SIGN_IDENTITY" "$APP_BUNDLE" >/dev/null
+else
+  echo "warning: signing with ad-hoc identity; run ./script/setup_codesign.sh to stabilize macOS permissions" >&2
+  codesign --force --sign - "$APP_BUNDLE" >/dev/null
+fi
 
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"

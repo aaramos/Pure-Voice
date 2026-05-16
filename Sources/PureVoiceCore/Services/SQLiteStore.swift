@@ -98,6 +98,7 @@ public final class SQLiteStore: @unchecked Sendable {
         );
         """)
         try seedDefaultPersonasIfNeeded()
+        try migratePersonaPromptsForNoReasoningInstruction()
     }
 
     public func seedDefaultPersonasIfNeeded() throws {
@@ -107,6 +108,20 @@ public final class SQLiteStore: @unchecked Sendable {
 
         for persona in PersonaDefaults.defaultPersonas {
             try upsertPersona(persona)
+        }
+    }
+
+    public func migratePersonaPromptsForNoReasoningInstruction() throws {
+        for persona in try loadPersonas()
+            where !persona.systemPrompt.contains("Return ONLY the final polished text.")
+        {
+            var updated = persona
+            updated.systemPrompt = [
+                persona.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines),
+                PersonaDefaults.noReasoningInstruction
+            ].joined(separator: "\n\n")
+            updated.updatedAt = Date()
+            try upsertPersona(updated)
         }
     }
 

@@ -24,45 +24,49 @@ final class RecordingStatusPanel: NSPanel {
         level = .floating
         becomesKeyOnlyIfNeeded = true
         isMovableByWindowBackground = false
-        hasShadow = true
+        hasShadow = false
         isOpaque = false
         backgroundColor = .clear
         appearance = NSAppearance(named: .darkAqua)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
 
-        let effectView = NSVisualEffectView(frame: contentView?.bounds ?? .zero)
-        effectView.material = .hudWindow
-        effectView.blendingMode = .behindWindow
-        effectView.state = .active
-        effectView.appearance = NSAppearance(named: .darkAqua)
-        effectView.autoresizingMask = [.width, .height]
-        effectView.wantsLayer = true
-        effectView.layer?.cornerRadius = 22
-        effectView.layer?.cornerCurve = .continuous
-        effectView.layer?.masksToBounds = true
+        let containerView = NSView(frame: contentView?.bounds ?? .zero)
+        containerView.appearance = NSAppearance(named: .darkAqua)
+        containerView.autoresizingMask = [.width, .height]
+        containerView.wantsLayer = true
+        containerView.layer?.backgroundColor = NSColor(calibratedWhite: 0.075, alpha: 1).cgColor
+        containerView.layer?.cornerRadius = 22
+        containerView.layer?.cornerCurve = .continuous
+        containerView.layer?.masksToBounds = true
+        containerView.layer?.borderWidth = 1
+        containerView.layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
 
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         hostingView.wantsLayer = true
         hostingView.appearance = NSAppearance(named: .darkAqua)
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
 
-        effectView.addSubview(hostingView)
-        contentView = effectView
+        containerView.addSubview(hostingView)
+        contentView = containerView
 
         NSLayoutConstraint.activate([
-            hostingView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
-            hostingView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
-            hostingView.topAnchor.constraint(equalTo: effectView.topAnchor),
-            hostingView.bottomAnchor.constraint(equalTo: effectView.bottomAnchor)
+            hostingView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
+            hostingView.topAnchor.constraint(equalTo: containerView.topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor)
         ])
     }
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    func show() {
+    func show(allowsUserDismissal: Bool) {
         reposition()
-        installDismissMonitorsIfNeeded()
+        if allowsUserDismissal {
+            installDismissMonitorsIfNeeded()
+        } else {
+            removeDismissMonitors()
+        }
         orderFrontRegardless()
     }
 
@@ -89,8 +93,8 @@ final class RecordingStatusPanel: NSPanel {
     private func installDismissMonitorsIfNeeded() {
         guard eventMonitors.isEmpty else { return }
 
-        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .keyDown]
-        if let globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] event in
+        let mouseMask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown]
+        if let globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseMask, handler: { [weak self] event in
             Task { @MainActor [weak self] in
                 self?.handleDismissEvent(event)
             }
@@ -98,7 +102,8 @@ final class RecordingStatusPanel: NSPanel {
             eventMonitors.append(globalMonitor)
         }
 
-        let localMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+        let localMask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .keyDown]
+        let localMonitor = NSEvent.addLocalMonitorForEvents(matching: localMask) { [weak self] event in
             Task { @MainActor [weak self] in
                 self?.handleDismissEvent(event)
             }

@@ -23,8 +23,9 @@ public final class PasteService: @unchecked Sendable {
     public func pasteOrCopy(_ text: String, originalTarget: FocusTarget?) -> PasteStatus {
         copyToPasteboard(text)
 
+        let accessibilityAllowed = hasAccessibilityPermission(prompt: false)
         guard
-            hasAccessibilityPermission(prompt: false),
+            accessibilityAllowed,
             let originalTarget,
             let current = NSWorkspace.shared.frontmostApplication,
             current.processIdentifier == originalTarget.processIdentifier

@@ -6,6 +6,7 @@ APP_NAME="Pure Voice"
 APP_BUNDLE="$ROOT_DIR/dist/$APP_NAME.app"
 DMG_PATH="$ROOT_DIR/dist/PureVoice-0.1.0.dmg"
 STAGING_DIR="$ROOT_DIR/dist/dmg-staging"
+CODE_SIGN_IDENTITY="${PUREVOICE_CODESIGN_IDENTITY:-Pure Voice Local Development}"
 
 CONFIGURATION=release "$ROOT_DIR/script/build_and_run.sh" --verify
 pkill -x "PureVoice" >/dev/null 2>&1 || true
@@ -21,6 +22,11 @@ hdiutil create \
   -format UDZO \
   "$DMG_PATH"
 
-codesign --force --sign - "$DMG_PATH" >/dev/null
+if security find-identity -p codesigning -v 2>/dev/null | grep -Fq "\"$CODE_SIGN_IDENTITY\""; then
+  codesign --force --sign "$CODE_SIGN_IDENTITY" "$DMG_PATH" >/dev/null
+else
+  echo "warning: signing DMG with ad-hoc identity; run ./script/setup_codesign.sh to stabilize macOS permissions" >&2
+  codesign --force --sign - "$DMG_PATH" >/dev/null
+fi
 
 echo "$DMG_PATH"
