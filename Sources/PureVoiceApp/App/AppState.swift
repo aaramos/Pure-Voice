@@ -138,6 +138,43 @@ final class AppState: ObservableObject {
         stage == .error || errorMessage?.isEmpty == false
     }
 
+    var latestOutputText: String {
+        if !polishedPreview.isEmpty {
+            return polishedPreview
+        }
+        return transcriptPreview
+    }
+
+    var hasLatestOutput: Bool {
+        !latestOutputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var latestOutputTitle: String {
+        switch lastPasteStatus {
+        case .pasted:
+            return "Pasted Into Target App"
+        case .copied:
+            return "Copied To Clipboard"
+        case .failed:
+            return "Output Delivery Failed"
+        case nil:
+            return "Latest Output"
+        }
+    }
+
+    var latestOutputInstruction: String {
+        switch lastPasteStatus {
+        case .pasted:
+            return "Pure Voice pasted this into the app that was active when recording started."
+        case .copied:
+            return "The text is on the clipboard. Press Command+V in the target app to paste it."
+        case .failed:
+            return "Pure Voice kept the text here. Use Copy Again, then paste it manually."
+        case nil:
+            return "This is the most recent transcript output."
+        }
+    }
+
     var attentionGuidance: AttentionGuidance {
         let message = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
         let issue = message?.isEmpty == false ? message! : "Pure Voice needs setup before it can continue."
@@ -368,6 +405,12 @@ final class AppState: ObservableObject {
         Parakeet: \(parakeetHealth.message)
         """
         _ = pasteService.copyToPasteboard(details)
+    }
+
+    func copyLatestOutputToClipboard() {
+        _ = pasteService.copyToPasteboard(latestOutputText)
+        lastPasteStatus = .copied
+        stage = .copied
     }
 
     func refreshLLMHealth() async {

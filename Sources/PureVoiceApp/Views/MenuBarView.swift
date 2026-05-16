@@ -16,6 +16,13 @@ struct MenuBarView: View {
                 Divider()
             }
 
+            if state.hasLatestOutput {
+                LatestOutputPanel()
+                    .environmentObject(state)
+
+                Divider()
+            }
+
             Button(state.stage == .recording ? "Stop Recording" : "Start Recording") {
                 Task { await state.toggleRecording() }
             }
@@ -56,6 +63,36 @@ struct MenuBarView: View {
         }
         .padding(.vertical, 8)
         .frame(width: 340)
+    }
+}
+
+private struct LatestOutputPanel: View {
+    @EnvironmentObject private var state: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(state.latestOutputTitle, systemImage: state.lastPasteStatus == .pasted ? "checkmark.circle.fill" : "doc.on.clipboard")
+                .font(.subheadline.weight(.semibold))
+
+            Text(state.latestOutputInstruction)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(state.latestOutputText)
+                .font(.caption)
+                .lineLimit(4)
+                .truncationMode(.tail)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button("Copy Again") {
+                state.copyLatestOutputToClipboard()
+            }
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
