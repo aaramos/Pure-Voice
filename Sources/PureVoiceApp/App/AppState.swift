@@ -1,9 +1,23 @@
+import AppKit
 import Foundation
 import PureVoiceCore
 import SwiftUI
+import UserNotifications
+
+enum RecordingStatus: Equatable {
+    case idle
+    case recording
+    case processing
+    case pastedToField
+    case copiedToClipboard
+    case retrying(attempt: Int)
+    case modelUnavailable
+}
 
 @MainActor
 final class AppState: ObservableObject {
+    private static let selectedOLMXModelDefaultsKey = "selectedOLMXModel"
+
     @Published var stage: AppStage = .idle
     @Published var personas: [Persona] = []
     @Published var selectedPersonaID = "default" {
@@ -19,7 +33,10 @@ final class AppState: ObservableObject {
     @Published var apiKeyPresent = false
     @Published var models: [OLMXModel] = []
     @Published var selectedModelID = "" {
-        didSet { saveStringConfig("selected_llm_model", selectedModelID) }
+        didSet {
+            saveStringConfig("selected_llm_model", selectedModelID)
+            UserDefaults.standard.set(selectedModelID, forKey: Self.selectedOLMXModelDefaultsKey)
+        }
     }
     @Published var saveHistory = true {
         didSet { saveBoolConfig("save_history", saveHistory) }
@@ -31,6 +48,10 @@ final class AppState: ObservableObject {
     @Published var polishedPreview = ""
     @Published var errorMessage: String?
     @Published var lastPasteStatus: PasteStatus?
+    @Published var recordingStatus: RecordingStatus = .idle {
+        didSet { handleRecordingStatusTransition(from: oldValue, to: recordingStatus) }
+    }
+    @Published var waveformLevels: [CGFloat] = Array(repeating: 4, count: 38)
 
     private let audioRecorder = AudioRecorderService()
     private let keychain = KeychainStore()
@@ -41,6 +62,16 @@ final class AppState: ObservableObject {
     private var activeAudioURL: URL?
     private var originalTarget: FocusTarget?
     private var loaded = false
+    private var meteringTimer: Timer?
+    private var recordingStatusPanel: RecordingStatusPanel?
+    private var recordingStatusDismissTask: Task<Void, Never>?
+    private var unavailableModelNoticeShownFor: String?
+
+    init() {
+        if let stored = UserDefaults.standard.string(forKey: Self.selectedOLMXModelDefaultsKey) {
+            selectedModelID = stored
+        }
+    }
 
     var selectedPersona: Persona {
         personas.first { $0.id == selectedPersonaID } ?? personas.first ?? PersonaDefaults.defaultPersonas[0]
@@ -80,7 +111,9 @@ final class AppState: ObservableObject {
             selectedPersonaID = readStringConfig("active_persona_id") ?? "default"
             endpointURLString = (readStringConfig("olmx_base_url") ?? "http://127.0.0.1:8000")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            selectedModelID = readStringConfig("selected_llm_model") ?? ""
+            selectedModelID = UserDefaults.standard.string(forKey: Self.selectedOLMXModelDefaultsKey)
+                ?? readStringConfig("selected_llm_model")
+                ?? selectedModelID
             if let rawEngine = readStringConfig("stt_engine"), let engine = STTEngine(rawValue: rawEngine) {
                 selectedSTTEngine = engine
             }
@@ -112,6 +145,9 @@ final class AppState: ObservableObject {
 
         _ = pasteService.hasAccessibilityPermission(prompt: true)
         await refreshHealth()
+        if apiKeyPresent {
+            await refreshModels(setsErrorStageOnFailure: false)
+        }
     }
 
     func saveAPIKey() async {
@@ -192,7 +228,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    func refreshModels() async {
+    func refreshModels(setsErrorStageOnFailure: Bool = true) async {
         endpointURLString = endpointURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             let key = try requireAPIKey()
@@ -212,7 +248,9 @@ final class AppState: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
             llmStatus = error.localizedDescription
-            stage = .error
+            if setsErrorStageOnFailure {
+                stage = .error
+            }
         }
     }
 
@@ -272,13 +310,17 @@ final class AppState: ObservableObject {
             lastPasteStatus = nil
             originalTarget = pasteService.captureFocus()
             activeAudioURL = try audioRecorder.startRecording()
+            waveformLevels = Array(repeating: 4, count: 38)
+            startMeteringTimer()
             stage = .recording
+            recordingStatus = .recording
         } catch {
             fail(error)
         }
     }
 
     func stopAndProcessRecording() async {
+        stopMeteringTimer()
         guard let audioURL = audioRecorder.stopRecording() ?? activeAudioURL else {
             failMessage("No recording was available to process.")
             return
@@ -291,6 +333,7 @@ final class AppState: ObservableObject {
 
         let overallStart = Date()
         stage = .transcribing
+        recordingStatus = .processing
 
         do {
             guard let sttClient else {
@@ -307,7 +350,7 @@ final class AppState: ObservableObject {
             stage = .polishing
             let polishStart = Date()
             let key = try requireAPIKey()
-            let polished = try await makeOLMXClient().polish(
+            let polished = try await polishWithSingleRetry(
                 transcript: sttResult.rawText,
                 persona: selectedPersona,
                 model: selectedModelID,
@@ -319,6 +362,7 @@ final class AppState: ObservableObject {
             let pasteStatus = pasteService.pasteOrCopy(polished, originalTarget: originalTarget)
             lastPasteStatus = pasteStatus
             stage = pasteStatus == .pasted ? .pasted : .copied
+            recordingStatus = pasteStatus == .pasted ? .pastedToField : .copiedToClipboard
 
             if saveHistory {
                 let record = TranscriptRecord(
@@ -356,6 +400,48 @@ final class AppState: ObservableObject {
         try OLMXClient(baseURLString: endpointURLString)
     }
 
+    private func polishWithSingleRetry(
+        transcript: String,
+        persona: Persona,
+        model: String,
+        apiKey: String
+    ) async throws -> String {
+        let client = try makeOLMXClient()
+
+        do {
+            return try await client.polish(
+                transcript: transcript,
+                persona: persona,
+                model: model,
+                apiKey: apiKey
+            )
+        } catch {
+            if OLMXClient.isConnectionRefused(error) {
+                recordingStatus = .modelUnavailable
+                throw error
+            }
+
+            guard OLMXClient.isRetryablePolishFailure(error) else {
+                throw error
+            }
+
+            recordingStatus = .retrying(attempt: 1)
+            try await Task.sleep(for: .seconds(3))
+
+            do {
+                return try await client.polish(
+                    transcript: transcript,
+                    persona: persona,
+                    model: model,
+                    apiKey: apiKey
+                )
+            } catch {
+                recordingStatus = .modelUnavailable
+                throw error
+            }
+        }
+    }
+
     private func fail(_ error: Error) {
         failMessage(error.localizedDescription)
     }
@@ -363,6 +449,9 @@ final class AppState: ObservableObject {
     private func failMessage(_ message: String) {
         errorMessage = message
         stage = .error
+        if recordingStatus != .modelUnavailable {
+            recordingStatus = .idle
+        }
     }
 
     private func readStringConfig(_ key: String) -> String? {
@@ -398,12 +487,109 @@ final class AppState: ObservableObject {
     }
 
     private func adjustModelSelectionAfterModelRefresh(fetched: [OLMXModel]) {
+        let previousSelection = selectedModelID
+
         if !selectedModelID.isEmpty && !fetched.contains(where: { $0.id == selectedModelID }) {
-            selectedModelID = ""
+            let fallback = fetched.first?.id ?? ""
+            selectedModelID = fallback
+
+            if !fallback.isEmpty, unavailableModelNoticeShownFor != previousSelection {
+                unavailableModelNoticeShownFor = previousSelection
+                showModelFallbackNotification(switchedTo: fallback)
+            }
+            return
         }
 
         if selectedModelID.isEmpty {
             selectedModelID = fetched.first?.id ?? ""
+        }
+    }
+
+    private func startMeteringTimer() {
+        meteringTimer?.invalidate()
+        meteringTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateWaveformLevel()
+            }
+        }
+    }
+
+    private func stopMeteringTimer() {
+        meteringTimer?.invalidate()
+        meteringTimer = nil
+    }
+
+    private func updateWaveformLevel() {
+        let db = audioRecorder.currentLevel()
+        let normalized = max(0, min(1, (CGFloat(db) + 60) / 60))
+        let height = 4 + normalized * 48
+
+        if waveformLevels.isEmpty {
+            waveformLevels = Array(repeating: 4, count: 37) + [height]
+        } else {
+            waveformLevels.removeFirst()
+            waveformLevels.append(height)
+        }
+    }
+
+    private func handleRecordingStatusTransition(from oldStatus: RecordingStatus, to newStatus: RecordingStatus) {
+        recordingStatusDismissTask?.cancel()
+        recordingStatusDismissTask = nil
+
+        switch newStatus {
+        case .idle:
+            recordingStatusPanel?.orderOut(nil)
+        case .recording, .processing, .retrying, .modelUnavailable, .pastedToField, .copiedToClipboard:
+            showRecordingStatusPanelIfNeeded()
+            recordingStatusPanel?.reposition()
+
+            if newStatus == .pastedToField || newStatus == .copiedToClipboard {
+                recordingStatusDismissTask = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(2))
+                    await MainActor.run {
+                        guard let self, self.recordingStatus == newStatus else { return }
+                        self.recordingStatus = .idle
+                    }
+                }
+            }
+        }
+    }
+
+    private func showRecordingStatusPanelIfNeeded() {
+        if recordingStatusPanel == nil {
+            recordingStatusPanel = RecordingStatusPanel(state: self) { [weak self] in
+                guard let self, self.recordingStatus == .modelUnavailable else { return }
+                self.recordingStatus = .idle
+            }
+        }
+
+        recordingStatusPanel?.show()
+    }
+
+    func openSettings() {
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        NSApp.activate(ignoringOtherApps: true)
+        recordingStatus = .idle
+    }
+
+    private func showModelFallbackNotification(switchedTo modelName: String) {
+        let message = "Previous model unavailable — switched to \(modelName)"
+        llmStatus = message
+
+        Task {
+            let center = UNUserNotificationCenter.current()
+            _ = try? await center.requestAuthorization(options: [.alert, .sound])
+
+            let content = UNMutableNotificationContent()
+            content.title = "Pure Voice"
+            content.body = message
+
+            let request = UNNotificationRequest(
+                identifier: "pure-voice-model-fallback-\(UUID().uuidString)",
+                content: content,
+                trigger: nil
+            )
+            try? await center.add(request)
         }
     }
 }

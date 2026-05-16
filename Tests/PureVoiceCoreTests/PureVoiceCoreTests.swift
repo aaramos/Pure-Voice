@@ -30,6 +30,16 @@ final class PureVoiceCoreTests: XCTestCase {
         XCTAssertTrue(messages?.last?["content"]?.contains("ship this tomorrow") == true)
     }
 
+    func testOLMXPolishRetryPolicyClassifiesExpectedFailures() {
+        XCTAssertTrue(OLMXClient.isRetryablePolishFailure(OLMXClientError.requestFailed(503, "warming")))
+        XCTAssertTrue(OLMXClient.isRetryablePolishFailure(OLMXClientError.authenticationRequired))
+        XCTAssertTrue(OLMXClient.isRetryablePolishFailure(URLError(.timedOut)))
+
+        XCTAssertTrue(OLMXClient.isConnectionRefused(URLError(.cannotConnectToHost)))
+        XCTAssertFalse(OLMXClient.isRetryablePolishFailure(URLError(.cannotConnectToHost)))
+        XCTAssertFalse(OLMXClient.isRetryablePolishFailure(OLMXClientError.emptyResponse))
+    }
+
     func testSQLiteSeedsPersonasAndPersistsConfigAndTranscript() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("pure-voice-test-\(UUID().uuidString).sqlite")

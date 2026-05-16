@@ -42,6 +42,29 @@ public final class OLMXClient: @unchecked Sendable {
         self.init(baseURL: url, session: session)
     }
 
+    public static func isConnectionRefused(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        return urlError.code == .cannotConnectToHost
+            || urlError.code == .cannotFindHost
+            || urlError.code == .notConnectedToInternet
+    }
+
+    public static func isRetryablePolishFailure(_ error: Error) -> Bool {
+        if let clientError = error as? OLMXClientError {
+            switch clientError {
+            case .requestFailed, .authenticationRequired:
+                return true
+            case .invalidBaseURL, .noChoices, .emptyResponse:
+                return false
+            }
+        }
+
+        guard let urlError = error as? URLError else { return false }
+        return urlError.code == .timedOut
+            || urlError.code == .networkConnectionLost
+            || urlError.code == .cannotLoadFromNetwork
+    }
+
     public func health() async throws -> OLMXHealth {
         return try await health(apiKey: nil)
     }

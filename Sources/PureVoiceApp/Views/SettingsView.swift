@@ -61,6 +61,9 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.menu)
+                .onChange(of: state.selectedModelID) { _, selectedModel in
+                    UserDefaults.standard.set(selectedModel, forKey: "selectedOLMXModel")
+                }
             }
         }
     }
