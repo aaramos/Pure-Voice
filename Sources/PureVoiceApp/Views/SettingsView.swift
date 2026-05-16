@@ -73,8 +73,6 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Picker("Engine", selection: $state.selectedSTTEngine) {
                     Text("Whisper").tag(STTEngine.whisper)
-                    Text("Parakeet").tag(STTEngine.parakeet)
-                        .disabled(!state.parakeetHealth.available)
                 }
                 .pickerStyle(.segmented)
 

@@ -10,6 +10,13 @@ private let pipelineLogger = Logger(
     category: "Pipeline"
 )
 
+private let parakeetDisabledHealth = STTHealth(
+    engine: "parakeet",
+    available: false,
+    message: "Temporarily disabled; use Whisper.",
+    model: nil
+)
+
 enum RecordingStatus: Equatable {
     case idle
     case recording
@@ -77,7 +84,7 @@ final class AppState: ObservableObject {
     }
     @Published var llmStatus = "Not checked"
     @Published var whisperHealth = STTHealth(engine: "whisper", available: false, message: "Not checked")
-    @Published var parakeetHealth = STTHealth(engine: "parakeet", available: false, message: "Not checked")
+    @Published var parakeetHealth = parakeetDisabledHealth
     @Published var transcriptPreview = ""
     @Published var polishedPreview = ""
     @Published var errorMessage: String?
@@ -130,7 +137,7 @@ final class AppState: ObservableObject {
     var canUseSelectedSTTEngine: Bool {
         switch selectedSTTEngine {
         case .whisper: whisperHealth.available
-        case .parakeet: parakeetHealth.available
+        case .parakeet: false
         }
     }
 
@@ -281,8 +288,12 @@ final class AppState: ObservableObject {
             selectedModelID = UserDefaults.standard.string(forKey: Self.selectedOLMXModelDefaultsKey)
                 ?? readStringConfig("selected_llm_model")
                 ?? selectedModelID
-            if let rawEngine = readStringConfig("stt_engine"), let engine = STTEngine(rawValue: rawEngine) {
+            if let rawEngine = readStringConfig("stt_engine"),
+               let engine = STTEngine(rawValue: rawEngine),
+               engine == .whisper {
                 selectedSTTEngine = engine
+            } else {
+                selectedSTTEngine = .whisper
             }
             saveHistory = readBoolConfig("save_history") ?? true
         } catch {
@@ -458,15 +469,13 @@ final class AppState: ObservableObject {
     }
 
     func refreshSTTHealth() async {
-        guard let sttClient else { return }
-        async let whisper = sttClient.health(engine: .whisper)
-        async let parakeet = sttClient.health(engine: .parakeet)
-        whisperHealth = await whisper
-        parakeetHealth = await parakeet
-
-        if selectedSTTEngine == .parakeet, !parakeetHealth.available {
+        parakeetHealth = parakeetDisabledHealth
+        if selectedSTTEngine == .parakeet {
             selectedSTTEngine = .whisper
         }
+
+        guard let sttClient else { return }
+        whisperHealth = await sttClient.health(engine: .whisper)
     }
 
     func toggleRecording() async {
