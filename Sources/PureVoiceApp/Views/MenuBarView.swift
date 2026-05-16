@@ -12,7 +12,6 @@ struct MenuBarView: View {
             Button(state.stage == .recording ? "Stop Recording" : "Start Recording") {
                 Task { await state.toggleRecording() }
             }
-            .keyboardShortcut(.space, modifiers: [.control, .option])
 
             Divider()
 
@@ -26,7 +25,11 @@ struct MenuBarView: View {
                 .lineLimit(1)
                 .foregroundStyle(.secondary)
 
-            Text("Hotkey: Control Option Space")
+            Text("Start: right Command + right Option")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text("Stop: right Option")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

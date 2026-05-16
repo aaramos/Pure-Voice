@@ -39,7 +39,7 @@ struct HUDView: View {
                     .font(.callout)
                     .lineLimit(4)
             } else {
-                Text("Control Option Space starts and stops recording.")
+                Text("Start with right Command + right Option. Stop with right Option.")
                     .foregroundStyle(.secondary)
             }
         }

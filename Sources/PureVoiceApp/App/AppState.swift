@@ -101,9 +101,14 @@ final class AppState: ObservableObject {
         sttClient = STTHelperClient(helperURL: helperURL)
         apiKeyPresent = ((try? keychain.read()) ?? nil)?.isEmpty == false
 
-        hotKeyService.start { [weak self] in
-            Task { await self?.toggleRecording() }
-        }
+        hotKeyService.start(
+            onStart: { [weak self] in
+                Task { await self?.startRecordingFromHotKey() }
+            },
+            onStop: { [weak self] in
+                Task { await self?.stopRecordingFromHotKey() }
+            }
+        )
 
         _ = pasteService.hasAccessibilityPermission(prompt: true)
         await refreshHealth()
@@ -232,6 +237,20 @@ final class AppState: ObservableObject {
         default:
             await startRecording()
         }
+    }
+
+    func startRecordingFromHotKey() async {
+        switch stage {
+        case .recording, .transcribing, .polishing:
+            return
+        default:
+            await startRecording()
+        }
+    }
+
+    func stopRecordingFromHotKey() async {
+        guard stage == .recording else { return }
+        await stopAndProcessRecording()
     }
 
     func startRecording() async {

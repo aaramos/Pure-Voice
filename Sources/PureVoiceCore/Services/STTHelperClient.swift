@@ -74,6 +74,7 @@ public final class STTHelperClient: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["python3", helperURL.path] + arguments
+        process.environment = makeHelperEnvironment()
 
         let stdout = Pipe()
         let stderr = Pipe()
@@ -92,5 +93,15 @@ public final class STTHelperClient: @unchecked Sendable {
         }
 
         return output
+    }
+
+    private func makeHelperEnvironment() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        let appSupport = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Pure Voice/STT")
+        let matplotlibConfig = appSupport.appendingPathComponent("matplotlib")
+        try? FileManager.default.createDirectory(at: matplotlibConfig, withIntermediateDirectories: true)
+        environment["MPLCONFIGDIR"] = matplotlibConfig.path
+        return environment
     }
 }

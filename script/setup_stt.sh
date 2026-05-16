@@ -5,8 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_SUPPORT="$HOME/Library/Application Support/Pure Voice"
 STT_DIR="$APP_SUPPORT/STT"
 VENV_DIR="$STT_DIR/.venv"
+export MPLCONFIGDIR="$STT_DIR/matplotlib"
 
 mkdir -p "$STT_DIR"
+mkdir -p "$MPLCONFIGDIR"
 
 if command -v uv >/dev/null 2>&1; then
   uv venv "$VENV_DIR" --python python3.12

@@ -14,6 +14,13 @@ APP_SUPPORT = Path.home() / "Library" / "Application Support" / "Pure Voice"
 STT_DIR = APP_SUPPORT / "STT"
 VENV_PYTHON = STT_DIR / ".venv" / "bin" / "python"
 WHISPER_CPP_MODEL = APP_SUPPORT / "Models" / "whisper.cpp" / "ggml-base.en.bin"
+MPLCONFIG_DIR = STT_DIR / "matplotlib"
+
+try:
+    MPLCONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = str(MPLCONFIG_DIR)
+except Exception:
+    pass
 
 
 def maybe_reexec_venv():
@@ -44,6 +51,14 @@ def import_faster_whisper():
     try:
         from faster_whisper import WhisperModel  # type: ignore
         return WhisperModel
+    except Exception:
+        return None
+
+
+def import_nemo_asr():
+    try:
+        import nemo.collections.asr as nemo_asr  # type: ignore
+        return nemo_asr
     except Exception:
         return None
 
@@ -102,21 +117,20 @@ def parakeet_health():
             "model": "stub",
         }
 
-    try:
-        import nemo.collections.asr  # type: ignore  # noqa: F401
+    if import_nemo_asr() is not None:
         return {
             "engine": "parakeet",
             "available": True,
             "message": "NeMo ASR ready",
             "model": os.environ.get("PURE_VOICE_PARAKEET_MODEL", "nvidia/parakeet-tdt-0.6b-v3"),
         }
-    except Exception:
-        return {
-            "engine": "parakeet",
-            "available": False,
-            "message": "Parakeet runtime not configured",
-            "model": None,
-        }
+
+    return {
+        "engine": "parakeet",
+        "available": False,
+        "message": "Run script/setup_parakeet.sh",
+        "model": None,
+    }
 
 
 def transcribe_with_faster_whisper(audio_path, model_name):
@@ -177,11 +191,47 @@ def transcribe_whisper(audio_path, model_name):
             raise RuntimeError(f"Whisper unavailable. faster-whisper: {faster_error}; whisper.cpp: {cpp_error}")
 
 
-def transcribe_parakeet(_audio_path, _model_name):
+def extract_transcription_text(output):
+    if isinstance(output, (list, tuple)):
+        if not output:
+            return ""
+        return extract_transcription_text(output[0])
+    if isinstance(output, dict):
+        return str(output.get("text") or output.get("transcript") or "").strip()
+    if hasattr(output, "text"):
+        return str(output.text).strip()
+    return str(output).strip()
+
+
+def transcribe_parakeet(audio_path, model_name):
     stub = os.environ.get("PURE_VOICE_PARAKEET_STUB_TEXT")
     if stub:
         return stub, "stub"
-    raise RuntimeError("Parakeet runtime is not configured for this Mac yet")
+
+    model_id = model_name or os.environ.get("PURE_VOICE_PARAKEET_MODEL", "nvidia/parakeet-tdt-0.6b-v3")
+    device = os.environ.get("PURE_VOICE_PARAKEET_DEVICE", "cpu")
+    if device == "cpu":
+        os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
+    nemo_asr = import_nemo_asr()
+    if nemo_asr is None:
+        raise RuntimeError("Parakeet requires NeMo ASR. Run script/setup_parakeet.sh.")
+
+    asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name=model_id)
+    if hasattr(asr_model, "eval"):
+        asr_model.eval()
+
+    if device:
+        try:
+            asr_model.to(device)
+        except Exception as device_error:
+            if device == "cpu":
+                raise
+            asr_model.to("cpu")
+            print(f"Fell back to CPU for Parakeet after device error: {device_error}", file=sys.stderr)
+
+    output = asr_model.transcribe([audio_path])
+    return extract_transcription_text(output), model_id
 
 
 def handle_health(args):
