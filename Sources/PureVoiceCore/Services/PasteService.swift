@@ -14,6 +14,9 @@ public final class PasteService: @unchecked Sendable {
         guard let app = NSWorkspace.shared.frontmostApplication else {
             return nil
         }
+        if app.bundleIdentifier == Bundle.main.bundleIdentifier {
+            return nil
+        }
         return FocusTarget(
             processIdentifier: app.processIdentifier,
             applicationName: app.localizedName
@@ -28,13 +31,36 @@ public final class PasteService: @unchecked Sendable {
         let accessibilityAllowed = hasAccessibilityPermission(prompt: false)
         guard
             accessibilityAllowed,
-            let originalTarget,
-            let current = NSWorkspace.shared.frontmostApplication,
-            current.processIdentifier == originalTarget.processIdentifier
+            let originalTarget
         else {
             return .copied
         }
 
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != originalTarget.processIdentifier {
+            NSRunningApplication(processIdentifier: originalTarget.processIdentifier)?
+                .activate(options: [.activateAllWindows])
+        }
+
+        guard waitForFrontmostApplication(processIdentifier: originalTarget.processIdentifier) else {
+            return .copied
+        }
+
+        postCommandV()
+        return .pasted
+    }
+
+    private func waitForFrontmostApplication(processIdentifier: Int32) -> Bool {
+        let deadline = Date().addingTimeInterval(0.6)
+        while Date() < deadline {
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == processIdentifier {
+                return true
+            }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier == processIdentifier
+    }
+
+    private func postCommandV() {
         let source = CGEventSource(stateID: .combinedSessionState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
@@ -42,7 +68,6 @@ public final class PasteService: @unchecked Sendable {
         keyUp?.flags = .maskCommand
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
-        return .pasted
     }
 
     @discardableResult
@@ -52,6 +77,7 @@ public final class PasteService: @unchecked Sendable {
         let pasteboard = NSPasteboard.general
         for _ in 0..<3 {
             pasteboard.clearContents()
+            pasteboard.declareTypes([.string], owner: nil)
             if pasteboard.setString(text, forType: .string),
                pasteboard.string(forType: .string) == text {
                 return true
