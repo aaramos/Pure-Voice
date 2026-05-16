@@ -9,6 +9,13 @@ struct MenuBarView: View {
             Label(state.stage.label, systemImage: state.stageIconName)
                 .font(.headline)
 
+            if state.needsAttention {
+                AttentionPanel(guidance: state.attentionGuidance)
+                    .environmentObject(state)
+
+                Divider()
+            }
+
             Button(state.stage == .recording ? "Stop Recording" : "Start Recording") {
                 Task { await state.toggleRecording() }
             }
@@ -48,6 +55,42 @@ struct MenuBarView: View {
             }
         }
         .padding(.vertical, 8)
-        .frame(width: 260)
+        .frame(width: 340)
+    }
+}
+
+private struct AttentionPanel: View {
+    @EnvironmentObject private var state: AppState
+    var guidance: AttentionGuidance
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(guidance.title, systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.red)
+
+            Text(guidance.message)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(guidance.nextStep)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button(guidance.actionTitle) {
+                    state.performAttentionAction()
+                }
+
+                Button("Copy Details") {
+                    state.copyAttentionDetailsToClipboard()
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.red.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }

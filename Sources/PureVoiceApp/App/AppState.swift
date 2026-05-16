@@ -32,6 +32,22 @@ private enum OutputDeliveryError: LocalizedError {
     }
 }
 
+struct AttentionGuidance: Equatable {
+    enum Action: Equatable {
+        case openAppSettings
+        case openMicrophonePrivacy
+        case openAccessibilityPrivacy
+        case refreshHealth
+        case startRecording
+    }
+
+    var title: String
+    var message: String
+    var nextStep: String
+    var actionTitle: String
+    var action: Action
+}
+
 @MainActor
 final class AppState: ObservableObject {
     private static let selectedOLMXModelDefaultsKey = "selectedOLMXModel"
@@ -116,6 +132,102 @@ final class AppState: ObservableObject {
         case .whisper: whisperHealth.available
         case .parakeet: parakeetHealth.available
         }
+    }
+
+    var needsAttention: Bool {
+        stage == .error || errorMessage?.isEmpty == false
+    }
+
+    var attentionGuidance: AttentionGuidance {
+        let message = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let issue = message?.isEmpty == false ? message! : "Pure Voice needs setup before it can continue."
+        let lowered = issue.lowercased()
+
+        if lowered.contains("microphone") {
+            return AttentionGuidance(
+                title: "Microphone Access Blocked",
+                message: issue,
+                nextStep: "Enable Pure Voice in System Settings > Privacy & Security > Microphone, then try recording again.",
+                actionTitle: "Open Microphone Privacy",
+                action: .openMicrophonePrivacy
+            )
+        }
+
+        if lowered.contains("accessibility")
+            || lowered.contains("control")
+            || lowered.contains("paste")
+            || lowered.contains("clipboard")
+        {
+            return AttentionGuidance(
+                title: "Paste Permission Needs Attention",
+                message: issue,
+                nextStep: "Enable Pure Voice in System Settings > Privacy & Security > Accessibility so it can paste into the app where you started recording. If you only want clipboard fallback, the transcript is copied when paste is unavailable.",
+                actionTitle: "Open Accessibility Privacy",
+                action: .openAccessibilityPrivacy
+            )
+        }
+
+        if lowered.contains("api key")
+            || lowered.contains("authentication")
+            || lowered.contains("rejected the api key")
+        {
+            return AttentionGuidance(
+                title: "OLMX Key Needs Attention",
+                message: issue,
+                nextStep: "Open Pure Voice settings, confirm the OLMX endpoint and save a valid API key.",
+                actionTitle: "Open Pure Voice Settings",
+                action: .openAppSettings
+            )
+        }
+
+        if lowered.contains("olmx")
+            || lowered.contains("model")
+            || lowered.contains("endpoint")
+            || lowered.contains("connect")
+            || lowered.contains("network")
+        {
+            return AttentionGuidance(
+                title: "OLMX Is Not Ready",
+                message: issue,
+                nextStep: "Make sure OLMX is running at the configured endpoint, refresh models, and select an available model.",
+                actionTitle: "Open Pure Voice Settings",
+                action: .openAppSettings
+            )
+        }
+
+        if lowered.contains("stt")
+            || lowered.contains("transcription")
+            || lowered.contains("transcribe")
+            || lowered.contains("helper")
+            || lowered.contains("whisper")
+            || lowered.contains("parakeet")
+        {
+            return AttentionGuidance(
+                title: "Speech Transcription Needs Setup",
+                message: issue,
+                nextStep: "Open Pure Voice settings and check the selected speech-to-text engine health.",
+                actionTitle: "Open Pure Voice Settings",
+                action: .openAppSettings
+            )
+        }
+
+        if lowered.contains("no recording") || lowered.contains("audio recorder") {
+            return AttentionGuidance(
+                title: "Recording Did Not Start",
+                message: issue,
+                nextStep: "Start a new recording and keep holding until you are ready to stop.",
+                actionTitle: "Try Recording Again",
+                action: .startRecording
+            )
+        }
+
+        return AttentionGuidance(
+            title: "Pure Voice Needs Attention",
+            message: issue,
+            nextStep: "Refresh health. If the issue remains, open Pure Voice settings and check microphone, transcription, OLMX endpoint, API key, and selected model.",
+            actionTitle: "Refresh Health",
+            action: .refreshHealth
+        )
     }
 
     func loadIfNeeded() async {
@@ -226,6 +338,36 @@ final class AppState: ObservableObject {
     func refreshHealth() async {
         await refreshLLMHealth()
         await refreshSTTHealth()
+    }
+
+    func performAttentionAction() {
+        switch attentionGuidance.action {
+        case .openAppSettings:
+            openSettings()
+        case .openMicrophonePrivacy:
+            openSystemSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+        case .openAccessibilityPrivacy:
+            openSystemSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        case .refreshHealth:
+            Task { await refreshHealth() }
+        case .startRecording:
+            Task { await startRecording() }
+        }
+    }
+
+    func copyAttentionDetailsToClipboard() {
+        let guidance = attentionGuidance
+        let details = """
+        Pure Voice status: \(stage.label)
+        Issue: \(guidance.message)
+        Next step: \(guidance.nextStep)
+        Persona: \(selectedPersona.name)
+        Model: \(activeModelLabel)
+        OLMX status: \(llmStatus)
+        Whisper: \(whisperHealth.message)
+        Parakeet: \(parakeetHealth.message)
+        """
+        _ = pasteService.copyToPasteboard(details)
     }
 
     func refreshLLMHealth() async {
@@ -661,6 +803,11 @@ final class AppState: ObservableObject {
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         NSApp.activate(ignoringOtherApps: true)
         recordingStatus = .idle
+    }
+
+    private func openSystemSettingsPane(_ urlString: String) {
+        guard let url = URL(string: urlString) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func showModelFallbackNotification(switchedTo modelName: String) {

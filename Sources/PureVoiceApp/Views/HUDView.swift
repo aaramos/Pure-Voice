@@ -30,10 +30,14 @@ struct HUDView: View {
             }
 
             if let error = state.errorMessage {
-                Text(error)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .lineLimit(3)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(error)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.red)
+                    Text(state.attentionGuidance.nextStep)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } else if !state.polishedPreview.isEmpty {
                 Text(state.polishedPreview)
                     .font(.callout)

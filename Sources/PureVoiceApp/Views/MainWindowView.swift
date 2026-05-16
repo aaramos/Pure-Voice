@@ -64,8 +64,31 @@ private struct PreviewPanel: View {
                 .font(.title3.weight(.semibold))
 
             if let error = state.errorMessage {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(state.attentionGuidance.title, systemImage: "exclamationmark.triangle.fill")
+                        .font(.headline)
+                        .foregroundStyle(.red)
+
+                    Text(error)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(state.attentionGuidance.nextStep)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack {
+                        Button(state.attentionGuidance.actionTitle) {
+                            state.performAttentionAction()
+                        }
+
+                        Button("Copy Details") {
+                            state.copyAttentionDetailsToClipboard()
+                        }
+                    }
+                }
+                .padding(12)
+                .background(Color.red.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
             LabeledContent("Raw transcript") {
