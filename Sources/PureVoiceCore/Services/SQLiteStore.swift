@@ -98,6 +98,7 @@ public final class SQLiteStore: @unchecked Sendable {
         );
         """)
         try seedDefaultPersonasIfNeeded()
+        try migrateDefaultPersonas()
         try migratePersonaPromptsForNoReasoningInstruction()
     }
 
@@ -108,6 +109,27 @@ public final class SQLiteStore: @unchecked Sendable {
 
         for persona in PersonaDefaults.defaultPersonas {
             try upsertPersona(persona)
+        }
+    }
+
+    public func migrateDefaultPersonas() throws {
+        let existingNames = Set(try loadPersonas().map(\.name))
+        for persona in PersonaDefaults.defaultPersonas where !existingNames.contains(persona.name) {
+            try upsertPersona(persona)
+        }
+
+        try locked {
+            let statement = try prepare("""
+            UPDATE personas
+            SET is_default = CASE WHEN name = ? THEN 1 ELSE 0 END,
+                updated_at = ?
+            WHERE 1 = 1;
+            """)
+            defer { sqlite3_finalize(statement) }
+
+            bindText(statement, 1, "Clarity")
+            bindText(statement, 2, formatDate(Date()))
+            try stepDone(statement)
         }
     }
 

@@ -216,14 +216,14 @@ public final class OLMXClient: @unchecked Sendable {
     private func extractFinalAnswerCandidate(from text: String) -> String? {
         if let candidate = extractCandidate(
             from: text,
-            markerPattern: "(?im)^\\s*(?:[-*•]\\s*)?\\**\\s*(final polished text|final answer|final message|polished text|output|response)\\**\\s*[:：]"
+            markerPattern: "(?im)^\\s*(?:[-*•]\\s*)?(?:#{1,6}\\s*)?\\**\\s*(final polished text|final answer|final message|polished text|output|response)\\**\\s*[:：]"
         ) {
             return candidate
         }
 
         return extractCandidate(
             from: text,
-            markerPattern: "(?im)^\\s*(?:[-*•]\\s*)?\\**\\s*option\\s*\\d+[^:：]*[:：]"
+            markerPattern: "(?im)^\\s*(?:[-*•]\\s*)?(?:#{1,6}\\s*)?\\**\\s*option\\s*\\d+[^:：]*[:：]"
         )
     }
 

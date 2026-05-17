@@ -1,11 +1,11 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 
 import PackageDescription
 
 let package = Package(
     name: "PureVoice",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v26)
     ],
     products: [
         .library(name: "PureVoiceCore", targets: ["PureVoiceCore"]),
@@ -15,6 +15,7 @@ let package = Package(
         .target(
             name: "PureVoiceCore",
             linkerSettings: [
+                .linkedFramework("FoundationModels"),
                 .linkedLibrary("sqlite3")
             ]
         ),
@@ -27,6 +28,7 @@ let package = Package(
             name: "PureVoiceCoreTests",
             dependencies: ["PureVoiceCore"],
             linkerSettings: [
+                .linkedFramework("FoundationModels"),
                 .linkedLibrary("sqlite3")
             ]
         )

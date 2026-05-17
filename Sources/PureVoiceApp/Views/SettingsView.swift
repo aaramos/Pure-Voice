@@ -7,7 +7,10 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             personaSection
-            olmxSection
+            polishingBackendSection
+            if state.polishingBackend == .olmx {
+                olmxSection
+            }
             sttSection
             privacySection
         }
@@ -63,6 +66,36 @@ struct SettingsView: View {
                 .pickerStyle(.menu)
                 .onChange(of: state.selectedModelID) { _, selectedModel in
                     UserDefaults.standard.set(selectedModel, forKey: "selectedOLMXModel")
+                }
+            }
+        }
+    }
+
+    private var polishingBackendSection: some View {
+        GroupBox("Polishing Backend") {
+            VStack(alignment: .leading, spacing: 12) {
+                Picker("Backend", selection: $state.polishingBackend) {
+                    Text("Apple On-Device (Foundation Models)").tag(PolishingBackend.appleFoundationModels)
+                        .disabled(!state.appleFoundationModelsSelectable)
+                    Text("OLMX (Local LLM)").tag(PolishingBackend.olmx)
+                }
+                .pickerStyle(.radioGroup)
+
+                HStack(spacing: 8) {
+                    Image(systemName: state.appleFoundationAvailability == .available ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(state.appleFoundationAvailability == .available ? .green : .orange)
+
+                    Text(state.appleFoundationStatusText)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.callout)
+
+                if state.polishingBackend == .appleFoundationModels {
+                    Text("Recommended when Apple Intelligence is available. OLMX is used automatically if on-device polishing is unavailable.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

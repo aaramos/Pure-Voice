@@ -11,7 +11,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct PureVoiceApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var state = AppState()
+    @StateObject private var state: AppState
+
+    init() {
+        let appState = AppState()
+        _state = StateObject(wrappedValue: appState)
+        Task { @MainActor in
+            await appState.loadIfNeeded()
+        }
+    }
 
     var body: some Scene {
         MenuBarExtra {

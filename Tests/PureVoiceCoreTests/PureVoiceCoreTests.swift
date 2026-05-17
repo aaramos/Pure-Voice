@@ -1,15 +1,19 @@
 import Foundation
+import SQLite3
 import XCTest
 @testable import PureVoiceCore
 
 final class PureVoiceCoreTests: XCTestCase {
     func testPersonaDefaultsIncludeRequiredPersonas() {
         let names = Set(PersonaDefaults.defaultPersonas.map(\.name))
+        XCTAssertTrue(names.contains("Clarity"))
+        XCTAssertTrue(names.contains("Ultra Concise"))
         XCTAssertTrue(names.contains("Default"))
         XCTAssertTrue(names.contains("Professional"))
         XCTAssertTrue(names.contains("Casual Friend"))
         XCTAssertTrue(names.contains("Boss"))
         XCTAssertTrue(names.contains("Technical"))
+        XCTAssertEqual(PersonaDefaults.defaultPersonas.filter(\.isDefault).map(\.name), ["Clarity"])
     }
 
     func testOLMXPolishRequestContainsPersonaAndTranscript() throws {
@@ -189,6 +193,44 @@ final class PureVoiceCoreTests: XCTestCase {
         XCTAssertEqual(polished, "Good morning! Hope your day is off to a great start.")
     }
 
+    func testOLMXPolishExtractsMarkdownFinalPolishedTextMarker() async throws {
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let data = """
+            {
+              "choices": [
+                {
+                  "message": {
+                    "content": "Good morning.\\n\\n### Final Polished Text:\\nGood morning."
+                  }
+                }
+              ]
+            }
+            """.data(using: .utf8)!
+            return (response, data)
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = OLMXClient(baseURL: URL(string: "http://127.0.0.1:8000")!, session: session)
+
+        let polished = try await client.polish(
+            transcript: "Good morning",
+            persona: PersonaDefaults.defaultPersonas.first { $0.name == "Professional" }!,
+            model: "Phi-3.5-mini-instruct-4bit",
+            apiKey: "test-key"
+        )
+
+        XCTAssertEqual(polished, "Good morning.")
+    }
+
     func testOLMXPolishKeepsMultilineCandidateAfterOptionMarker() async throws {
         MockURLProtocol.handler = { request in
             let response = HTTPURLResponse(
@@ -293,8 +335,10 @@ final class PureVoiceCoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let store = try SQLiteStore(databaseURL: url)
-        XCTAssertEqual(try store.loadPersonas().count, 5)
-        XCTAssertTrue(try store.loadPersonas().allSatisfy {
+        let personas = try store.loadPersonas()
+        XCTAssertEqual(personas.count, 7)
+        XCTAssertEqual(personas.filter(\.isDefault).map(\.name), ["Clarity"])
+        XCTAssertTrue(personas.allSatisfy {
             $0.systemPrompt.contains("Return ONLY the final polished text.")
         })
 
@@ -314,6 +358,49 @@ final class PureVoiceCoreTests: XCTestCase {
             endToEndLatencyMs: 300,
             pasteStatus: .copied
         ))
+    }
+
+    func testSQLiteMigratesExistingPersonasToClarityDefault() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pure-voice-existing-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+        defer {
+            if let db {
+                sqlite3_close(db)
+            }
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        let sql = """
+        CREATE TABLE personas (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            system_prompt TEXT NOT NULL,
+            is_builtin INTEGER NOT NULL,
+            is_default INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        INSERT INTO personas VALUES ('default', 'Default', 'Rewrite clearly.', 1, 1, '\(now)', '\(now)');
+        """
+        XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK)
+        if let db {
+            sqlite3_close(db)
+        }
+        db = nil
+
+        let store = try SQLiteStore(databaseURL: url)
+        let personas = try store.loadPersonas()
+
+        XCTAssertTrue(personas.contains { $0.name == "Clarity" })
+        XCTAssertTrue(personas.contains { $0.name == "Ultra Concise" })
+        XCTAssertEqual(personas.filter(\.isDefault).map(\.name), ["Clarity"])
+        XCTAssertTrue(personas.allSatisfy {
+            $0.systemPrompt.contains("Return ONLY the final polished text.")
+        })
     }
 
     func testSTTResultDecodesHelperShape() throws {
