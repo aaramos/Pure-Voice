@@ -426,13 +426,18 @@ final class PureVoiceCoreTests: XCTestCase {
         let store = KeychainStore(service: "com.adrian.purevoice.tests.\(UUID().uuidString)", account: "api-key")
         defer { try? store.delete() }
 
+        XCTAssertFalse(store.containsValueWithoutUserInteraction())
+
         try store.save("secret")
+        XCTAssertTrue(store.containsValueWithoutUserInteraction())
         XCTAssertEqual(try store.read(), "secret")
+        XCTAssertEqual(try store.read(allowsUserInteraction: false), "secret")
 
         try store.save("updated")
         XCTAssertEqual(try store.read(), "updated")
 
         try store.delete()
+        XCTAssertFalse(store.containsValueWithoutUserInteraction())
         XCTAssertNil(try store.read())
     }
 }

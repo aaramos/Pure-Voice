@@ -373,7 +373,7 @@ final class AppState: ObservableObject {
             sourceHelperURL
         }
         sttClient = STTHelperClient(helperURL: helperURL)
-        apiKeyPresent = ((try? keychain.read()) ?? nil)?.isEmpty == false
+        apiKeyPresent = keychain.containsValueWithoutUserInteraction()
 
         hotKeyService.start(
             onStart: { [weak self] in
@@ -386,9 +386,9 @@ final class AppState: ObservableObject {
 
         _ = pasteService.hasAccessibilityPermission(prompt: false)
         await refreshAppleFoundationAvailability(switchesToFallback: true)
-        await refreshHealth()
+        await refreshHealth(allowsKeychainPrompt: false)
         if apiKeyPresent, polishingBackend == .olmx {
-            await refreshModels(setsErrorStageOnFailure: false)
+            await refreshModels(setsErrorStageOnFailure: false, allowsKeychainPrompt: false)
         }
     }
 
@@ -447,9 +447,9 @@ final class AppState: ObservableObject {
         }
     }
 
-    func refreshHealth() async {
+    func refreshHealth(allowsKeychainPrompt: Bool = true) async {
         await refreshAppleFoundationAvailability(switchesToFallback: true)
-        await refreshLLMHealth()
+        await refreshLLMHealth(allowsKeychainPrompt: allowsKeychainPrompt)
         await refreshSTTHealth()
     }
 
@@ -522,13 +522,13 @@ final class AppState: ObservableObject {
         stage = .copied
     }
 
-    func refreshLLMHealth() async {
+    func refreshLLMHealth(allowsKeychainPrompt: Bool = true) async {
         guard polishingBackend == .olmx else { return }
 
         do {
             let client = try makeOLMXClient()
             let health = try await {
-                if let key = try? requireAPIKey() {
+                if let key = try? requireAPIKey(allowsUserInteraction: allowsKeychainPrompt) {
                     return try await client.health(apiKey: key)
                 }
                 return try await client.health()
@@ -542,10 +542,13 @@ final class AppState: ObservableObject {
         }
     }
 
-    func refreshModels(setsErrorStageOnFailure: Bool = true) async {
+    func refreshModels(
+        setsErrorStageOnFailure: Bool = true,
+        allowsKeychainPrompt: Bool = true
+    ) async {
         endpointURLString = endpointURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            let key = try requireAPIKey()
+            let key = try requireAPIKey(allowsUserInteraction: allowsKeychainPrompt)
             let client = try makeOLMXClient()
             let fetched = try await client.models(apiKey: key)
             models = fetched
@@ -770,8 +773,8 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func requireAPIKey() throws -> String {
-        guard let rawKey = try keychain.read(),
+    private func requireAPIKey(allowsUserInteraction: Bool = true) throws -> String {
+        guard let rawKey = try keychain.read(allowsUserInteraction: allowsUserInteraction),
               let key = Optional(rawKey).map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }),
               !key.isEmpty else {
             throw OLMXClientError.authenticationRequired
