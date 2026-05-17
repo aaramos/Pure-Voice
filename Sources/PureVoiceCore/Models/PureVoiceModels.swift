@@ -42,6 +42,31 @@ public enum PasteStatus: String, Codable, Sendable {
     case failed
 }
 
+public enum PasteFallbackReason: String, Codable, Sendable {
+    case none
+    case clipboardUnavailable
+    case accessibilityPermissionMissing
+    case targetUnavailable
+    case targetActivationFailed
+    case pasteEventFailed
+}
+
+public struct PasteDeliveryResult: Sendable {
+    public var status: PasteStatus
+    public var fallbackReason: PasteFallbackReason
+    public var target: FocusTarget?
+
+    public init(
+        status: PasteStatus,
+        fallbackReason: PasteFallbackReason = .none,
+        target: FocusTarget? = nil
+    ) {
+        self.status = status
+        self.fallbackReason = fallbackReason
+        self.target = target
+    }
+}
+
 public struct Persona: Identifiable, Codable, Hashable, Sendable {
     public var id: String
     public var name: String
@@ -206,9 +231,11 @@ public struct STTHealth: Codable, Equatable, Sendable {
 public struct FocusTarget: Codable, Equatable, Sendable {
     public var processIdentifier: Int32
     public var applicationName: String?
+    public var bundleIdentifier: String?
 
-    public init(processIdentifier: Int32, applicationName: String?) {
+    public init(processIdentifier: Int32, applicationName: String?, bundleIdentifier: String? = nil) {
         self.processIdentifier = processIdentifier
         self.applicationName = applicationName
+        self.bundleIdentifier = bundleIdentifier
     }
 }
