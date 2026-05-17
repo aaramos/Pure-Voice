@@ -46,6 +46,7 @@ public enum PasteFallbackReason: String, Codable, Sendable {
     case accessibilityPermissionMissing
     case targetUnavailable
     case targetActivationFailed
+    case focusedInputUnavailable
     case pasteEventFailed
 }
 

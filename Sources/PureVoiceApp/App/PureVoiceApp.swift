@@ -27,7 +27,13 @@ struct PureVoiceApp: App {
                 .environmentObject(state)
                 .task { await state.loadIfNeeded() }
         } label: {
-            Label("Pure Voice", systemImage: state.stageIconName)
+            if state.stage == .recording {
+                MenuBarIconView(isRecording: true)
+            } else {
+                Label("Pure Voice", systemImage: "mic.fill")
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Pure Voice")
+            }
         }
 
         WindowGroup("Pure Voice") {

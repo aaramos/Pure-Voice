@@ -53,7 +53,7 @@ public final class PasteService: @unchecked Sendable {
             return PasteDeliveryResult(status: .copied, fallbackReason: .targetUnavailable)
         }
 
-        guard hasAccessibilityPermission(prompt: false) else {
+        guard hasAccessibilityPermission(prompt: true) else {
             return PasteDeliveryResult(status: .copied, fallbackReason: .accessibilityPermissionMissing, target: target)
         }
 
@@ -69,9 +69,13 @@ public final class PasteService: @unchecked Sendable {
             return PasteDeliveryResult(status: .copied, fallbackReason: .targetActivationFailed, target: target)
         }
 
-        Thread.sleep(forTimeInterval: 0.12)
+        Thread.sleep(forTimeInterval: 0.2)
+        if writeDirectlyToFocusedInput(text, target: target) {
+            return PasteDeliveryResult(status: .pasted, target: target)
+        }
+
         guard postCommandV() else {
-            return PasteDeliveryResult(status: .copied, fallbackReason: .pasteEventFailed, target: target)
+            return PasteDeliveryResult(status: .copied, fallbackReason: .focusedInputUnavailable, target: target)
         }
 
         return PasteDeliveryResult(status: .pasted, target: target)
@@ -150,6 +154,102 @@ public final class PasteService: @unchecked Sendable {
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
         return true
+    }
+
+    private func writeDirectlyToFocusedInput(_ text: String, target: FocusTarget) -> Bool {
+        guard let element = focusedElement(matching: target) else { return false }
+
+        if AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFTypeRef) == .success {
+            return true
+        }
+
+        var rawValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &rawValue) == .success,
+              let currentValue = rawValue as? String else {
+            return false
+        }
+
+        guard let selectedRange = selectedTextRange(in: element) else {
+            return false
+        }
+        guard let nextValue = Self.replacingSelectedText(
+            in: currentValue,
+            with: text,
+            selectedRange: selectedRange
+        ) else {
+            return false
+        }
+
+        guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, nextValue as CFTypeRef) == .success else {
+            return false
+        }
+
+        var insertionRange = CFRange(location: selectedRange.location + (text as NSString).length, length: 0)
+        if let axRange = AXValueCreate(.cfRange, &insertionRange) {
+            _ = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
+        }
+
+        return true
+    }
+
+    private func focusedElement(matching target: FocusTarget) -> AXUIElement? {
+        let systemWideElement = AXUIElementCreateSystemWide()
+        var rawElement: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            systemWideElement,
+            kAXFocusedUIElementAttribute as CFString,
+            &rawElement
+        ) == .success,
+              let rawElement else {
+            return nil
+        }
+
+        let element = rawElement as! AXUIElement
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success else { return nil }
+        if pid == target.processIdentifier {
+            return element
+        }
+
+        guard let application = NSRunningApplication(processIdentifier: pid) else { return nil }
+        guard isFrontmost(application, matching: target) else { return nil }
+        return element
+    }
+
+    private func selectedTextRange(in element: AXUIElement) -> CFRange? {
+        var rawRange: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            &rawRange
+        ) == .success,
+              let rawRange else {
+            return nil
+        }
+
+        let axRange = rawRange as! AXValue
+        var range = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(axRange, .cfRange, &range) else { return nil }
+        return range
+    }
+
+    static func replacingSelectedText(
+        in currentValue: String,
+        with replacement: String,
+        selectedRange: CFRange
+    ) -> String? {
+        let currentNSString = currentValue as NSString
+        guard selectedRange.location >= 0,
+              selectedRange.length >= 0,
+              selectedRange.location <= currentNSString.length,
+              selectedRange.location + selectedRange.length <= currentNSString.length else {
+            return nil
+        }
+
+        return currentNSString.replacingCharacters(
+            in: NSRange(location: selectedRange.location, length: selectedRange.length),
+            with: replacement
+        )
     }
 
     @discardableResult

@@ -74,6 +74,9 @@ final class AppState: ObservableObject {
     @Published var errorMessage: String?
     @Published var lastPasteStatus: PasteStatus?
     @Published var lastPasteFallbackReason: PasteFallbackReason?
+    @Published var availableUpdate: AppUpdateInfo?
+    @Published var updateStatus = "Not checked"
+    @Published var updateInProgress = false
     @Published var recordingStatus: RecordingStatus = .idle {
         didSet { handleRecordingStatusTransition(from: oldValue, to: recordingStatus) }
     }
@@ -81,6 +84,8 @@ final class AppState: ObservableObject {
 
     private let audioRecorder = AudioRecorderService()
     private let appleClient = AppleFoundationModelClient()
+    private let releaseClient = GitHubReleaseClient()
+    private let updateInstaller = GitHubUpdateInstaller()
     private let pasteService = PasteService()
     private let hotKeyService = HotKeyService()
     private var store: SQLiteStore?
@@ -167,6 +172,8 @@ final class AppState: ObservableObject {
                 return "Pure Voice copied this because it could not identify the target field. Click the field first, then start recording with the hotkey."
             case .targetActivationFailed:
                 return "Pure Voice copied this because it could not bring the original target app back to the front."
+            case .focusedInputUnavailable:
+                return "Pure Voice copied this because the original app did not expose a focused text field for automatic insertion."
             case .pasteEventFailed:
                 return "Pure Voice copied this because macOS did not accept the paste keystroke."
             case .clipboardUnavailable:
@@ -265,7 +272,7 @@ final class AppState: ObservableObject {
             let store = try SQLiteStore(databaseURL: SQLiteStore.defaultDatabaseURL())
             self.store = store
             personas = try store.loadPersonas()
-            let defaultPersonaID = personas.first(where: \.isDefault)?.id ?? "clarity"
+            let defaultPersonaID = personas.first(where: \.isDefault)?.id ?? PersonaDefaults.defaultPersonaID
             let storedPersonaID = readStringConfig("active_persona_id") ?? defaultPersonaID
             selectedPersonaID = personas.contains { $0.id == storedPersonaID }
                 ? storedPersonaID
@@ -304,6 +311,80 @@ final class AppState: ObservableObject {
 
         _ = pasteService.hasAccessibilityPermission(prompt: false)
         await refreshHealth()
+        await checkForUpdates(promptIfAvailable: true)
+    }
+
+    func checkForUpdates(promptIfAvailable: Bool = false) async {
+        updateStatus = "Checking GitHub releases..."
+
+        do {
+            let release = try await releaseClient.fetchLatestRelease()
+            let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+
+            guard let updateInfo = GitHubUpdateService.updateInfo(
+                currentVersion: currentVersion,
+                latestRelease: release
+            ) else {
+                availableUpdate = nil
+                updateStatus = "Pure Voice is up to date."
+                return
+            }
+
+            availableUpdate = updateInfo
+            updateStatus = "Pure Voice \(updateInfo.latestVersion) is available."
+
+            if promptIfAvailable {
+                promptForUpdate(updateInfo)
+            }
+        } catch let error as GitHubUpdaterError {
+            switch error {
+            case .invalidResponse(404):
+                availableUpdate = nil
+                updateStatus = "No GitHub releases published yet."
+            default:
+                updateStatus = "Update check failed: \(error.localizedDescription)"
+            }
+        } catch {
+            updateStatus = "Update check failed: \(error.localizedDescription)"
+        }
+    }
+
+    func installAvailableUpdate() async {
+        guard let availableUpdate else { return }
+        updateInProgress = true
+        updateStatus = "Downloading \(availableUpdate.assetName)..."
+
+        do {
+            try await updateInstaller.downloadAndPrepareInstall(availableUpdate)
+            updateStatus = "Installing update..."
+            NSApp.terminate(nil)
+        } catch {
+            updateInProgress = false
+            updateStatus = "Update failed: \(error.localizedDescription)"
+            errorMessage = updateStatus
+            stage = .error
+        }
+    }
+
+    private func promptForUpdate(_ updateInfo: AppUpdateInfo) {
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.messageText = "Pure Voice \(updateInfo.latestVersion) is available"
+        alert.informativeText = "You are running \(updateInfo.currentVersion). Pure Voice can download \(updateInfo.assetName) from GitHub Releases and update itself now."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Update")
+        alert.addButton(withTitle: "Later")
+        alert.addButton(withTitle: "View Release")
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            Task { await installAvailableUpdate() }
+        case .alertThirdButtonReturn:
+            NSWorkspace.shared.open(updateInfo.releaseURL)
+        default:
+            break
+        }
     }
 
     func refreshHealth() async {

@@ -9,6 +9,7 @@ struct SettingsView: View {
             personaSection
             appleIntelligenceSection
             sttSection
+            updateSection
             privacySection
         }
     }
@@ -51,6 +52,36 @@ struct SettingsView: View {
 
                 Button("Refresh STT Health") {
                     Task { await state.refreshSTTHealth() }
+                }
+            }
+        }
+    }
+
+    private var updateSection: some View {
+        GroupBox("Updates") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: state.availableUpdate == nil ? "checkmark.circle.fill" : "arrow.down.circle.fill")
+                        .foregroundStyle(state.availableUpdate == nil ? .green : .blue)
+
+                    Text(state.updateStatus)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer()
+                }
+
+                HStack {
+                    Button("Check For Updates") {
+                        Task { await state.checkForUpdates() }
+                    }
+                    .disabled(state.updateInProgress)
+
+                    if state.availableUpdate != nil {
+                        Button(state.updateInProgress ? "Updating..." : "Update Now") {
+                            Task { await state.installAvailableUpdate() }
+                        }
+                        .disabled(state.updateInProgress)
+                    }
                 }
             }
         }

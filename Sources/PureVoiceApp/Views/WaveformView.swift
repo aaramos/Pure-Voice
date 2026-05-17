@@ -4,77 +4,126 @@ struct WaveformView: View {
     var levels: [CGFloat]
     var status: RecordingStatus
 
-    @State private var pulse = false
-
     var body: some View {
-        HStack(alignment: .center, spacing: 3) {
-            ForEach(Array(renderedLevels.enumerated()), id: \.offset) { index, level in
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(barColor)
-                    .frame(width: 4, height: level)
-                    .opacity(barOpacity(index: index))
-                    .animation(.easeOut(duration: 0.3), value: level)
-                    .animation(
-                        .easeInOut(duration: 0.82)
-                            .repeatForever(autoreverses: true)
-                            .delay(Double(index) * 0.018),
-                        value: pulse
-                    )
+        TimelineView(.animation) { timeline in
+            Canvas { context, size in
+                let seconds = timeline.date.timeIntervalSinceReferenceDate
+                drawFlowingWave(in: &context, size: size, phase: CGFloat(seconds) * 1.35)
             }
         }
-        .frame(height: 60)
-        .onAppear {
-            pulse = true
+        .frame(height: 64)
+    }
+
+    private func drawFlowingWave(in context: inout GraphicsContext, size: CGSize, phase: CGFloat) {
+        let rect = CGRect(origin: .zero, size: size)
+        let centerY = rect.midY
+        let active = status == .recording || status == .processing
+        let intensity = active ? max(0.18, liveIntensity) : 0.12
+        let amplitude = (active ? 18 : 8) + intensity * 22
+        let lineWidth: CGFloat = active ? 4.5 : 3.0
+
+        let mainPath = wavePath(
+            width: size.width,
+            centerY: centerY,
+            amplitude: amplitude,
+            phase: phase
+        )
+        let lowerPath = wavePath(
+            width: size.width,
+            centerY: centerY + 2.5,
+            amplitude: amplitude * 0.56,
+            phase: phase + .pi * 0.34
+        )
+
+        drawEndpointDots(in: &context, size: size, active: active)
+
+        context.addFilter(.shadow(color: Color(red: 0.22, green: 0.65, blue: 1.0).opacity(active ? 0.55 : 0.18), radius: active ? 7 : 3))
+        context.stroke(
+            lowerPath,
+            with: .linearGradient(
+                Gradient(colors: [
+                    Color(red: 0.05, green: 0.66, blue: 0.92).opacity(active ? 0.38 : 0.14),
+                    Color(red: 0.48, green: 0.62, blue: 1.0).opacity(active ? 0.44 : 0.18),
+                    Color(red: 0.68, green: 0.24, blue: 1.0).opacity(active ? 0.38 : 0.14)
+                ]),
+                startPoint: CGPoint(x: 0, y: centerY),
+                endPoint: CGPoint(x: size.width, y: centerY)
+            ),
+            style: StrokeStyle(lineWidth: lineWidth * 0.72, lineCap: .round, lineJoin: .round)
+        )
+
+        context.addFilter(.shadow(color: Color(red: 0.58, green: 0.34, blue: 1.0).opacity(active ? 0.48 : 0.14), radius: active ? 8 : 3))
+        context.stroke(
+            mainPath,
+            with: .linearGradient(
+                Gradient(colors: [
+                    Color(red: 0.08, green: 0.78, blue: 1.0).opacity(active ? 1 : 0.42),
+                    Color.white.opacity(active ? 0.9 : 0.45),
+                    Color(red: 0.70, green: 0.30, blue: 1.0).opacity(active ? 1 : 0.42)
+                ]),
+                startPoint: CGPoint(x: 0, y: centerY),
+                endPoint: CGPoint(x: size.width, y: centerY)
+            ),
+            style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+        )
+    }
+
+    private func drawEndpointDots(in context: inout GraphicsContext, size: CGSize, active: Bool) {
+        let centerY = size.height / 2
+        let dotColor = active
+            ? Color(red: 0.20, green: 0.76, blue: 1.0)
+            : Color(nsColor: .secondaryLabelColor)
+        let rightColor = active
+            ? Color(red: 0.72, green: 0.28, blue: 1.0)
+            : Color(nsColor: .secondaryLabelColor)
+
+        for index in 0..<5 {
+            let radius = CGFloat(2.0 - Double(index) * 0.18)
+            let leftX = CGFloat(index) * 10 + 8
+            let rightX = size.width - CGFloat(index) * 10 - 8
+            context.fill(
+                Path(ellipseIn: CGRect(x: leftX - radius, y: centerY - radius, width: radius * 2, height: radius * 2)),
+                with: .color(dotColor.opacity(active ? 0.72 - Double(index) * 0.08 : 0.18))
+            )
+            context.fill(
+                Path(ellipseIn: CGRect(x: rightX - radius, y: centerY - radius, width: radius * 2, height: radius * 2)),
+                with: .color(rightColor.opacity(active ? 0.72 - Double(index) * 0.08 : 0.18))
+            )
         }
     }
 
-    private var renderedLevels: [CGFloat] {
-        switch status {
-        case .recording, .processing:
-            return paddedLevels.map { min(52, max(4, $0)) }
-        case .idle, .pastedToField, .copiedToClipboard, .copiedRawTranscript, .retrying, .modelUnavailable:
-            return Array(repeating: 4, count: 38)
+    private func wavePath(width: CGFloat, centerY: CGFloat, amplitude: CGFloat, phase: CGFloat) -> Path {
+        var path = Path()
+        let steps = 120
+        let startX: CGFloat = 42
+        let endX = max(startX + 1, width - 42)
+
+        for step in 0...steps {
+            let t = CGFloat(step) / CGFloat(steps)
+            let x = startX + (endX - startX) * t
+            let leftEnvelope = exp(-pow((t - 0.34) / 0.20, 2))
+            let rightEnvelope = exp(-pow((t - 0.70) / 0.24, 2))
+            let envelope = max(leftEnvelope, rightEnvelope)
+            let y = centerY + sin(t * .pi * 5.2 + phase) * amplitude * envelope
+
+            if step == 0 {
+                path.move(to: CGPoint(x: x, y: y))
+            } else {
+                path.addLine(to: CGPoint(x: x, y: y))
+            }
         }
+
+        return path
+    }
+
+    private var liveIntensity: CGFloat {
+        let maxLevel = paddedLevels.max() ?? 4
+        return max(0, min(1, (maxLevel - 4) / 48))
     }
 
     private var paddedLevels: [CGFloat] {
         let clamped = Array(levels.suffix(38))
         guard clamped.count < 38 else { return clamped }
         return Array(repeating: 4, count: 38 - clamped.count) + clamped
-    }
-
-    private var barColor: Color {
-        switch status {
-        case .recording, .processing:
-            return Color(hex: 0xA78BFA)
-        case .idle, .pastedToField, .copiedToClipboard, .copiedRawTranscript, .retrying, .modelUnavailable:
-            return Color(nsColor: .secondaryLabelColor)
-        }
-    }
-
-    private func barOpacity(index: Int) -> Double {
-        switch status {
-        case .recording:
-            guard isSilent else { return 1 }
-            return pulse ? 0.36 + Double(index % 7) * 0.045 : 1
-        case .processing:
-            return 0.38
-        case .idle, .pastedToField, .copiedToClipboard, .copiedRawTranscript, .retrying, .modelUnavailable:
-            return 0.10
-        }
-    }
-
-    private var isSilent: Bool {
-        paddedLevels.max() ?? 4 <= 8
-    }
-}
-
-private extension Color {
-    init(hex: UInt32) {
-        self.init(
-            red: Double((hex >> 16) & 0xFF) / 255,
-            green: Double((hex >> 8) & 0xFF) / 255,
-            blue: Double(hex & 0xFF) / 255
-        )
     }
 }

@@ -47,10 +47,32 @@ struct MenuBarView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            if let availableUpdate = state.availableUpdate {
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Update Available", systemImage: "arrow.down.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+
+                    Text("Pure Voice \(availableUpdate.latestVersion)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Button(state.updateInProgress ? "Updating..." : "Update Now") {
+                        Task { await state.installAvailableUpdate() }
+                    }
+                    .disabled(state.updateInProgress)
+                }
+            }
+
             Divider()
 
             SettingsLink {
                 Text("Settings")
+            }
+
+            Button("Check For Updates") {
+                Task { await state.checkForUpdates() }
             }
 
             Button("Refresh Health") {

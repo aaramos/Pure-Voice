@@ -34,10 +34,14 @@ swift test
 
 The DMG is created at `dist/PureVoice-1.0.0.dmg`.
 
+## Backlog
+
+The v1.x backlog lives in [docs/backlog.md](docs/backlog.md).
+
 ## v1 Notes
 
 - Whisper is the v1 speech-to-text engine.
-- v1 includes two personas: Clarity and Ultra Concise.
+- v1 includes six writing modes: Polish, Rewrite, Proofread, Concise, Clarity, and Ultra Concise. Polish is the default.
 - Polishing uses Apple Foundation Models and requires macOS 26 with Apple Intelligence available.
 - The global recording gesture is `right Command + right Option` to start and `right Option` to stop.
 - Transcript history is stored locally in SQLite under Application Support.

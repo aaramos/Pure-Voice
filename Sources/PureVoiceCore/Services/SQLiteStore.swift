@@ -92,7 +92,8 @@ public final class SQLiteStore: @unchecked Sendable {
         try cleanupRemovedV1State()
         try seedDefaultPersonasIfNeeded()
         try migrateDefaultPersonas()
-        try migratePersonaPromptsForNoReasoningInstruction()
+        try syncBuiltinPersonaPrompts()
+        try migrateActivePersonaDefaultToPolish()
     }
 
     private func cleanupRemovedV1State() throws {
@@ -127,14 +128,16 @@ public final class SQLiteStore: @unchecked Sendable {
         }
 
         try locked {
+            let placeholders = Array(repeating: "?", count: PersonaDefaults.defaultPersonas.count).joined(separator: ", ")
             let deleteStatement = try prepare("""
             DELETE FROM personas
-            WHERE name NOT IN (?, ?);
+            WHERE name NOT IN (\(placeholders));
             """)
             defer { sqlite3_finalize(deleteStatement) }
 
-            bindText(deleteStatement, 1, "Clarity")
-            bindText(deleteStatement, 2, "Ultra Concise")
+            for (index, persona) in PersonaDefaults.defaultPersonas.enumerated() {
+                bindText(deleteStatement, Int32(index + 1), persona.name)
+            }
             try stepDone(deleteStatement)
         }
 
@@ -147,7 +150,7 @@ public final class SQLiteStore: @unchecked Sendable {
             """)
             defer { sqlite3_finalize(statement) }
 
-            bindText(statement, 1, "Clarity")
+            bindText(statement, 1, PersonaDefaults.defaultPersonaName)
             bindText(statement, 2, formatDate(Date()))
             try stepDone(statement)
         }
@@ -165,6 +168,36 @@ public final class SQLiteStore: @unchecked Sendable {
             updated.updatedAt = Date()
             try upsertPersona(updated)
         }
+    }
+
+    public func syncBuiltinPersonaPrompts() throws {
+        try migratePersonaPromptsForNoReasoningInstruction()
+
+        let defaultsByName = Dictionary(uniqueKeysWithValues: PersonaDefaults.defaultPersonas.map { ($0.name, $0) })
+        for persona in try loadPersonas() {
+            guard let defaultPersona = defaultsByName[persona.name],
+                  persona.isBuiltin,
+                  persona.systemPrompt != defaultPersona.systemPrompt else {
+                continue
+            }
+
+            var updated = persona
+            updated.systemPrompt = defaultPersona.systemPrompt
+            updated.isDefault = defaultPersona.isDefault
+            updated.updatedAt = Date()
+            try upsertPersona(updated)
+        }
+    }
+
+    public func migrateActivePersonaDefaultToPolish() throws {
+        guard let activePersona = try loadConfig(key: "active_persona_id"),
+              activePersona == "\"rewrite\""
+                || activePersona == "\"clarity\""
+                || activePersona == "\"default\"" else {
+            return
+        }
+
+        try saveConfig(key: "active_persona_id", valueJSON: "\"\(PersonaDefaults.defaultPersonaID)\"")
     }
 
     public func loadPersonas() throws -> [Persona] {
