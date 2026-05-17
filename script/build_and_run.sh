@@ -7,6 +7,8 @@ DISPLAY_NAME="Pure Voice"
 ICON_NAME="PureVoice"
 BUNDLE_ID="com.adrian.purevoice"
 MIN_SYSTEM_VERSION="26.0"
+MARKETING_VERSION="1.0.0"
+BUILD_VERSION="100"
 CONFIGURATION="${CONFIGURATION:-debug}"
 CODE_SIGN_IDENTITY="${PUREVOICE_CODESIGN_IDENTITY:-Pure Voice Local Development}"
 
@@ -54,9 +56,9 @@ cat >"$INFO_PLIST" <<PLIST
   <key>LSBackgroundOnly</key>
   <false/>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$BUILD_VERSION</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>$MARKETING_VERSION</string>
   <key>CFBundleIconFile</key>
   <string>$ICON_NAME</string>
   <key>CFBundleIconName</key>

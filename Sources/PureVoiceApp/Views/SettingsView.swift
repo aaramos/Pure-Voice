@@ -7,10 +7,7 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             personaSection
-            polishingBackendSection
-            if state.polishingBackend == .olmx {
-                olmxSection
-            }
+            appleIntelligenceSection
             sttSection
             privacySection
         }
@@ -27,76 +24,22 @@ struct SettingsView: View {
         }
     }
 
-    private var olmxSection: some View {
-        GroupBox("OLMX Endpoint") {
+    private var appleIntelligenceSection: some View {
+        GroupBox("Polishing") {
             VStack(alignment: .leading, spacing: 12) {
-                TextField("Base URL", text: $state.endpointURLString)
-                    .textFieldStyle(.roundedBorder)
-
-                HStack {
-                    SecureField(state.apiKeyPresent ? "Saved API key" : "API key", text: $state.apiKeyInput)
-                        .textFieldStyle(.roundedBorder)
-
-                    Button("Save Key") {
-                        Task { await state.saveAPIKey() }
-                    }
-                    .disabled(state.apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-
-                HStack {
-                    Button("Check Health") {
-                        Task { await state.refreshLLMHealth() }
-                    }
-
-                    Button("Refresh Models") {
-                        Task { await state.refreshModels() }
-                    }
-
-                    Text(state.llmStatus)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Picker("Polishing model", selection: $state.selectedModelID) {
-                    Text("Select a model").tag("")
-                    ForEach(state.models) { model in
-                        Text(model.id).tag(model.id)
-                    }
-                }
-                .pickerStyle(.menu)
-                .onChange(of: state.selectedModelID) { _, selectedModel in
-                    UserDefaults.standard.set(selectedModel, forKey: "selectedOLMXModel")
-                }
-            }
-        }
-    }
-
-    private var polishingBackendSection: some View {
-        GroupBox("Polishing Backend") {
-            VStack(alignment: .leading, spacing: 12) {
-                Picker("Backend", selection: $state.polishingBackend) {
-                    Text("Apple On-Device (Foundation Models)").tag(PolishingBackend.appleFoundationModels)
-                        .disabled(!state.appleFoundationModelsSelectable)
-                    Text("OLMX (Local LLM)").tag(PolishingBackend.olmx)
-                }
-                .pickerStyle(.radioGroup)
-
                 HStack(spacing: 8) {
                     Image(systemName: state.appleFoundationAvailability == .available ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(state.appleFoundationAvailability == .available ? .green : .orange)
+
+                    Text("Apple On-Device")
+
+                    Spacer()
 
                     Text(state.appleFoundationStatusText)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .font(.callout)
-
-                if state.polishingBackend == .appleFoundationModels {
-                    Text("Recommended when Apple Intelligence is available. OLMX is used automatically if on-device polishing is unavailable.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
         }
     }
@@ -104,13 +47,7 @@ struct SettingsView: View {
     private var sttSection: some View {
         GroupBox("Speech To Text") {
             VStack(alignment: .leading, spacing: 12) {
-                Picker("Engine", selection: $state.selectedSTTEngine) {
-                    Text("Whisper").tag(STTEngine.whisper)
-                }
-                .pickerStyle(.segmented)
-
                 healthRow("Whisper", health: state.whisperHealth)
-                healthRow("Parakeet", health: state.parakeetHealth)
 
                 Button("Refresh STT Health") {
                     Task { await state.refreshSTTHealth() }

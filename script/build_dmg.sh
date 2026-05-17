@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Pure Voice"
 APP_BUNDLE="$ROOT_DIR/dist/$APP_NAME.app"
-DMG_PATH="$ROOT_DIR/dist/PureVoice-0.1.0.dmg"
+DMG_PATH="$ROOT_DIR/dist/PureVoice-1.0.0.dmg"
 STAGING_DIR="$ROOT_DIR/dist/dmg-staging"
 CODE_SIGN_IDENTITY="${PUREVOICE_CODESIGN_IDENTITY:-Pure Voice Local Development}"
 

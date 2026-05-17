@@ -88,18 +88,26 @@ public final class SQLiteStore: @unchecked Sendable {
             updated_at TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS model_cache (
-            id TEXT PRIMARY KEY,
-            endpoint_url TEXT NOT NULL,
-            model_id TEXT NOT NULL,
-            display_name TEXT,
-            provider TEXT,
-            last_seen_at TEXT NOT NULL
-        );
         """)
+        try cleanupRemovedV1State()
         try seedDefaultPersonasIfNeeded()
         try migrateDefaultPersonas()
         try migratePersonaPromptsForNoReasoningInstruction()
+    }
+
+    private func cleanupRemovedV1State() throws {
+        try execute("""
+        DROP TABLE IF EXISTS model_cache;
+
+        DELETE FROM app_config
+        WHERE key IN (
+            'polishing_backend',
+            'selected_llm_model',
+            'selected_olmx_model',
+            'selectedOLMXModel',
+            'olmx_endpoint_url'
+        );
+        """)
     }
 
     public func seedDefaultPersonasIfNeeded() throws {
@@ -116,6 +124,18 @@ public final class SQLiteStore: @unchecked Sendable {
         let existingNames = Set(try loadPersonas().map(\.name))
         for persona in PersonaDefaults.defaultPersonas where !existingNames.contains(persona.name) {
             try upsertPersona(persona)
+        }
+
+        try locked {
+            let deleteStatement = try prepare("""
+            DELETE FROM personas
+            WHERE name NOT IN (?, ?);
+            """)
+            defer { sqlite3_finalize(deleteStatement) }
+
+            bindText(deleteStatement, 1, "Clarity")
+            bindText(deleteStatement, 2, "Ultra Concise")
+            try stepDone(deleteStatement)
         }
 
         try locked {
@@ -230,32 +250,6 @@ public final class SQLiteStore: @unchecked Sendable {
                 return nil
             }
             throw SQLiteStoreError.stepFailed(lastErrorMessage)
-        }
-    }
-
-    public func cacheModels(endpointURL: String, models: [OLMXModel]) throws {
-        try locked {
-            for model in models {
-                let statement = try prepare("""
-                INSERT INTO model_cache (id, endpoint_url, model_id, display_name, provider, last_seen_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    endpoint_url = excluded.endpoint_url,
-                    model_id = excluded.model_id,
-                    display_name = excluded.display_name,
-                    provider = excluded.provider,
-                    last_seen_at = excluded.last_seen_at;
-                """)
-                defer { sqlite3_finalize(statement) }
-                let cacheID = "\(endpointURL)|\(model.id)"
-                bindText(statement, 1, cacheID)
-                bindText(statement, 2, endpointURL)
-                bindText(statement, 3, model.id)
-                bindText(statement, 4, model.id)
-                bindText(statement, 5, model.ownedBy)
-                bindText(statement, 6, formatDate(Date()))
-                try stepDone(statement)
-            }
         }
     }
 

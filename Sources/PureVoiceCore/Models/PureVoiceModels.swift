@@ -24,14 +24,12 @@ public enum AppStage: String, Codable, CaseIterable, Sendable {
 
 public enum STTEngine: String, Codable, CaseIterable, Identifiable, Sendable {
     case whisper
-    case parakeet
 
     public var id: String { rawValue }
 
     public var displayName: String {
         switch self {
         case .whisper: "Whisper"
-        case .parakeet: "Parakeet"
         }
     }
 }
@@ -144,39 +142,6 @@ public struct TranscriptRecord: Identifiable, Codable, Sendable {
         self.errorMessage = errorMessage
         self.rating = rating
         self.createdAt = createdAt
-    }
-}
-
-public struct OLMXModel: Identifiable, Codable, Hashable, Sendable {
-    public var id: String
-    public var object: String?
-    public var ownedBy: String?
-
-    public init(id: String, object: String? = nil, ownedBy: String? = nil) {
-        self.id = id
-        self.object = object
-        self.ownedBy = ownedBy
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case object
-        case ownedBy = "owned_by"
-    }
-}
-
-public struct OLMXHealth: Codable, Equatable, Sendable {
-    public var status: String
-    public var defaultModel: String?
-
-    public init(status: String, defaultModel: String?) {
-        self.status = status
-        self.defaultModel = defaultModel
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case status
-        case defaultModel = "default_model"
     }
 }
 

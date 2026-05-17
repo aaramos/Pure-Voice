@@ -1,11 +1,11 @@
 # Pure Voice
 
-Pure Voice is a native macOS menu bar app for turning dictated thoughts into polished text. The Phase 1 loop is:
+Pure Voice is a native macOS menu bar app for turning dictated thoughts into polished text. The v1 loop is:
 
 1. Press `right Command + right Option` to start recording.
 2. Press `right Option` to stop.
 3. Transcribe locally through the app-owned STT helper.
-4. Polish through the OLMX OpenAI-compatible endpoint at `http://127.0.0.1:8000`.
+4. Polish on-device with Apple Foundation Models.
 5. Paste into the original app when safe, otherwise copy to clipboard.
 
 ## First Run
@@ -16,20 +16,13 @@ Pure Voice is a native macOS menu bar app for turning dictated thoughts into pol
    ./script/setup_stt.sh
    ```
 
-2. Optional: install Parakeet support:
-
-   ```bash
-   ./script/setup_parakeet.sh
-   ```
-
-3. Run the app:
+2. Run the app:
 
    ```bash
    ./script/build_and_run.sh
    ```
 
-4. In the Pure Voice window, enter the OLMX API key. It is stored in macOS Keychain.
-5. Click `Refresh Models`, then select the model to use for polishing.
+3. Confirm Apple Intelligence is enabled in System Settings.
 
 ## Build And Test
 
@@ -39,12 +32,13 @@ swift test
 ./script/build_dmg.sh
 ```
 
-The DMG is created at `dist/PureVoice-0.1.0.dmg`.
+The DMG is created at `dist/PureVoice-1.0.0.dmg`.
 
-## Phase 1 Notes
+## v1 Notes
 
-- Whisper is the required working STT engine for Phase 1.
-- Parakeet uses NVIDIA NeMo ASR when `./script/setup_parakeet.sh` has been run.
+- Whisper is the v1 speech-to-text engine.
+- v1 includes two personas: Clarity and Ultra Concise.
+- Polishing uses Apple Foundation Models and requires macOS 26 with Apple Intelligence available.
 - The global recording gesture is `right Command + right Option` to start and `right Option` to stop.
 - Transcript history is stored locally in SQLite under Application Support.
 - Raw audio is temporary and is deleted after successful transcription.

@@ -3,18 +3,10 @@ import Foundation
 import OSLog
 import PureVoiceCore
 import SwiftUI
-import UserNotifications
 
 private let pipelineLogger = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? "com.adrian.purevoice",
     category: "Pipeline"
-)
-
-private let parakeetDisabledHealth = STTHealth(
-    engine: "parakeet",
-    available: false,
-    message: "Temporarily disabled; use Whisper.",
-    model: nil
 )
 
 enum RecordingStatus: Equatable {
@@ -26,22 +18,6 @@ enum RecordingStatus: Equatable {
     case copiedRawTranscript
     case retrying(attempt: Int)
     case modelUnavailable
-}
-
-enum PolishingBackend: String, CaseIterable, Identifiable {
-    case appleFoundationModels = "Apple On-Device"
-    case olmx = "OLMX (Local LLM)"
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .appleFoundationModels:
-            return "Apple On-Device"
-        case .olmx:
-            return "OLMX (Local LLM)"
-        }
-    }
 }
 
 private enum OutputDeliveryError: LocalizedError {
@@ -79,9 +55,6 @@ struct AttentionGuidance: Equatable {
 
 @MainActor
 final class AppState: ObservableObject {
-    private static let selectedOLMXModelDefaultsKey = "selectedOLMXModel"
-    private static let polishingBackendDefaultsKey = "polishingBackend"
-
     @Published var stage: AppStage = .idle
     @Published var personas: [Persona] = []
     @Published var selectedPersonaID = "clarity" {
@@ -90,34 +63,12 @@ final class AppState: ObservableObject {
     @Published var selectedSTTEngine: STTEngine = .whisper {
         didSet { saveStringConfig("stt_engine", selectedSTTEngine.rawValue) }
     }
-    @Published var endpointURLString = "http://127.0.0.1:8000" {
-        didSet { saveStringConfig("olmx_base_url", endpointURLString) }
-    }
-    @Published var apiKeyInput = ""
-    @Published var apiKeyPresent = false
-    @Published var models: [OLMXModel] = []
-    @Published var selectedModelID = "" {
-        didSet {
-            saveStringConfig("selected_llm_model", selectedModelID)
-            UserDefaults.standard.set(selectedModelID, forKey: Self.selectedOLMXModelDefaultsKey)
-        }
-    }
     @Published var saveHistory = true {
         didSet { saveBoolConfig("save_history", saveHistory) }
     }
     @Published var llmStatus = "Not checked"
-    @Published var polishingBackend: PolishingBackend = .appleFoundationModels {
-        didSet {
-            UserDefaults.standard.set(polishingBackend.rawValue, forKey: Self.polishingBackendDefaultsKey)
-            guard oldValue != polishingBackend else { return }
-            if polishingBackend == .appleFoundationModels {
-                Task { await refreshAppleFoundationAvailability(switchesToFallback: true) }
-            }
-        }
-    }
     @Published var appleFoundationAvailability = AppleFoundationModelClient.availability
     @Published var whisperHealth = STTHealth(engine: "whisper", available: false, message: "Not checked")
-    @Published var parakeetHealth = parakeetDisabledHealth
     @Published var transcriptPreview = ""
     @Published var polishedPreview = ""
     @Published var errorMessage: String?
@@ -130,7 +81,6 @@ final class AppState: ObservableObject {
 
     private let audioRecorder = AudioRecorderService()
     private let appleClient = AppleFoundationModelClient()
-    private let keychain = KeychainStore()
     private let pasteService = PasteService()
     private let hotKeyService = HotKeyService()
     private var store: SQLiteStore?
@@ -141,17 +91,8 @@ final class AppState: ObservableObject {
     private var meteringTimer: Timer?
     private var recordingStatusPanel: RecordingStatusPanel?
     private var recordingStatusDismissTask: Task<Void, Never>?
-    private var unavailableModelNoticeShownFor: String?
-    private var appleFallbackNoticeShown = false
 
     init() {
-        if let stored = UserDefaults.standard.string(forKey: Self.selectedOLMXModelDefaultsKey) {
-            selectedModelID = stored
-        }
-        if let stored = UserDefaults.standard.string(forKey: Self.polishingBackendDefaultsKey),
-           let backend = PolishingBackend(rawValue: stored) {
-            polishingBackend = backend
-        }
         appleFoundationAvailability = AppleFoundationModelClient.availability
     }
 
@@ -160,12 +101,7 @@ final class AppState: ObservableObject {
     }
 
     var activeModelLabel: String {
-        switch polishingBackend {
-        case .appleFoundationModels:
-            return "Apple On-Device"
-        case .olmx:
-            return selectedModelID.isEmpty ? "No model selected" : selectedModelID
-        }
+        "Apple On-Device"
     }
 
     var stageIconName: String {
@@ -181,10 +117,7 @@ final class AppState: ObservableObject {
     }
 
     var canUseSelectedSTTEngine: Bool {
-        switch selectedSTTEngine {
-        case .whisper: whisperHealth.available
-        case .parakeet: false
-        }
+        whisperHealth.available
     }
 
     var appleFoundationStatusText: String {
@@ -192,15 +125,6 @@ final class AppState: ObservableObject {
             return "\(appleFoundationAvailability.statusText) ✓"
         }
         return appleFoundationAvailability.statusText
-    }
-
-    var appleFoundationModelsSelectable: Bool {
-        switch appleFoundationAvailability {
-        case .available, .modelNotReady:
-            return true
-        case .appleIntelligenceNotEnabled, .deviceNotEligible, .unavailable:
-            return false
-        }
     }
 
     var needsAttention: Bool {
@@ -286,29 +210,14 @@ final class AppState: ObservableObject {
             )
         }
 
-        if lowered.contains("api key")
-            || lowered.contains("authentication")
-            || lowered.contains("rejected the api key")
-        {
-            return AttentionGuidance(
-                title: "OLMX Key Needs Attention",
-                message: issue,
-                nextStep: "Open Pure Voice settings, confirm the OLMX endpoint and save a valid API key.",
-                actionTitle: "Open Pure Voice Settings",
-                action: .openAppSettings
-            )
-        }
-
-        if lowered.contains("olmx")
+        if lowered.contains("apple intelligence")
+            || lowered.contains("foundation")
             || lowered.contains("model")
-            || lowered.contains("endpoint")
-            || lowered.contains("connect")
-            || lowered.contains("network")
         {
             return AttentionGuidance(
-                title: "OLMX Is Not Ready",
+                title: "Apple Intelligence Needs Attention",
                 message: issue,
-                nextStep: "Make sure OLMX is running at the configured endpoint, refresh models, and select an available model.",
+                nextStep: "Enable Apple Intelligence in System Settings, wait for the on-device model to finish downloading, then try again.",
                 actionTitle: "Open Pure Voice Settings",
                 action: .openAppSettings
             )
@@ -319,12 +228,11 @@ final class AppState: ObservableObject {
             || lowered.contains("transcribe")
             || lowered.contains("helper")
             || lowered.contains("whisper")
-            || lowered.contains("parakeet")
         {
             return AttentionGuidance(
                 title: "Speech Transcription Needs Setup",
                 message: issue,
-                nextStep: "Open Pure Voice settings and check the selected speech-to-text engine health.",
+                nextStep: "Open Pure Voice settings and check Whisper health.",
                 actionTitle: "Open Pure Voice Settings",
                 action: .openAppSettings
             )
@@ -343,7 +251,7 @@ final class AppState: ObservableObject {
         return AttentionGuidance(
             title: "Pure Voice Needs Attention",
             message: issue,
-            nextStep: "Refresh health. If the issue remains, open Pure Voice settings and check microphone, transcription, OLMX endpoint, API key, and selected model.",
+            nextStep: "Refresh health. If the issue remains, open Pure Voice settings and check microphone, Whisper, and Apple Intelligence status.",
             actionTitle: "Refresh Health",
             action: .refreshHealth
         )
@@ -357,14 +265,11 @@ final class AppState: ObservableObject {
             let store = try SQLiteStore(databaseURL: SQLiteStore.defaultDatabaseURL())
             self.store = store
             personas = try store.loadPersonas()
-            selectedPersonaID = readStringConfig("active_persona_id")
-                ?? personas.first(where: \.isDefault)?.id
-                ?? "clarity"
-            endpointURLString = (readStringConfig("olmx_base_url") ?? "http://127.0.0.1:8000")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            selectedModelID = UserDefaults.standard.string(forKey: Self.selectedOLMXModelDefaultsKey)
-                ?? readStringConfig("selected_llm_model")
-                ?? selectedModelID
+            let defaultPersonaID = personas.first(where: \.isDefault)?.id ?? "clarity"
+            let storedPersonaID = readStringConfig("active_persona_id") ?? defaultPersonaID
+            selectedPersonaID = personas.contains { $0.id == storedPersonaID }
+                ? storedPersonaID
+                : defaultPersonaID
             if let rawEngine = readStringConfig("stt_engine"),
                let engine = STTEngine(rawValue: rawEngine),
                engine == .whisper {
@@ -387,7 +292,6 @@ final class AppState: ObservableObject {
             sourceHelperURL
         }
         sttClient = STTHelperClient(helperURL: helperURL)
-        apiKeyPresent = keychain.containsValueWithoutUserInteraction()
 
         hotKeyService.start(
             onStart: { [weak self] in
@@ -399,102 +303,30 @@ final class AppState: ObservableObject {
         )
 
         _ = pasteService.hasAccessibilityPermission(prompt: false)
-        await refreshAppleFoundationAvailability(switchesToFallback: true)
-        await refreshHealth(allowsKeychainPrompt: false)
-        if apiKeyPresent, polishingBackend == .olmx {
-            await refreshModels(setsErrorStageOnFailure: false, allowsKeychainPrompt: false)
-        }
+        await refreshHealth()
     }
 
-    func saveAPIKey() async {
-        let trimmed = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            errorMessage = "Enter your OLMX API key first."
-            stage = .error
-            return
-        }
-
-        let normalizedEndpoint = endpointURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedEndpoint.isEmpty else {
-            errorMessage = "Enter a valid OLMX endpoint URL first."
-            stage = .error
-            return
-        }
-
-        do {
-            if endpointURLString != normalizedEndpoint {
-                endpointURLString = normalizedEndpoint
-            }
-
-            try keychain.save(trimmed)
-            apiKeyInput = ""
-            apiKeyPresent = true
-            errorMessage = nil
-            llmStatus = "API key saved. Refreshing models..."
-            stage = .idle
-
-            do {
-                let client = try makeOLMXClient()
-                let fetched = try await client.models(apiKey: trimmed)
-                models = fetched
-                try store?.cacheModels(endpointURL: endpointURLString, models: fetched)
-                adjustModelSelectionAfterModelRefresh(fetched: fetched)
-
-                llmStatus = fetched.isEmpty
-                    ? "API key saved. No models returned for this endpoint."
-                    : "API key saved. \(fetched.count) models loaded."
-            } catch {
-                if let error = error as? OLMXClientError, case .authenticationRequired = error {
-                    try? keychain.delete()
-                    apiKeyPresent = false
-                    errorMessage = "OLMX rejected the API key. Check your key and try again."
-                    stage = .error
-                } else {
-                    errorMessage = nil
-                    llmStatus = "Key saved, but model refresh failed: \(error.localizedDescription)"
-                }
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-            stage = .error
-            llmStatus = error.localizedDescription
-        }
-    }
-
-    func refreshHealth(allowsKeychainPrompt: Bool = true) async {
-        await refreshAppleFoundationAvailability(switchesToFallback: true)
-        await refreshLLMHealth(allowsKeychainPrompt: allowsKeychainPrompt)
+    func refreshHealth() async {
+        await refreshAppleFoundationAvailability()
         await refreshSTTHealth()
     }
 
     @discardableResult
-    func refreshAppleFoundationAvailability(switchesToFallback: Bool) async -> AppleFoundationModelAvailability {
+    func refreshAppleFoundationAvailability() async -> AppleFoundationModelAvailability {
         let availability = AppleFoundationModelClient.availability
         appleFoundationAvailability = availability
 
         switch availability {
         case .available:
-            if polishingBackend == .appleFoundationModels {
-                llmStatus = "Apple Intelligence available."
-            }
+            llmStatus = "Apple Intelligence available."
         case .appleIntelligenceNotEnabled:
-            llmStatus = "Enable Apple Intelligence in System Settings to use on-device polishing. Falling back to OLMX."
-            if switchesToFallback, polishingBackend == .appleFoundationModels {
-                polishingBackend = .olmx
-                showPolishingFallbackNotification(message: "Enable Apple Intelligence in System Settings to use on-device polishing. Falling back to OLMX.")
-            }
+            llmStatus = "Enable Apple Intelligence in System Settings to use on-device polishing."
         case .deviceNotEligible:
-            llmStatus = "This device cannot run Apple Foundation Models. Falling back to OLMX."
-            if switchesToFallback, polishingBackend == .appleFoundationModels {
-                polishingBackend = .olmx
-            }
+            llmStatus = "This device cannot run Apple Foundation Models."
         case .modelNotReady:
             llmStatus = "Apple Intelligence model loading..."
         case .unavailable(let reason):
-            llmStatus = "Apple Foundation Models unavailable: \(reason). Falling back to OLMX."
-            if switchesToFallback, polishingBackend == .appleFoundationModels {
-                polishingBackend = .olmx
-            }
+            llmStatus = "Apple Foundation Models unavailable: \(reason)."
         }
 
         return availability
@@ -522,10 +354,9 @@ final class AppState: ObservableObject {
         Issue: \(guidance.message)
         Next step: \(guidance.nextStep)
         Persona: \(selectedPersona.name)
-        Model: \(activeModelLabel)
-        OLMX status: \(llmStatus)
+        Polishing: \(activeModelLabel)
+        Apple Intelligence: \(llmStatus)
         Whisper: \(whisperHealth.message)
-        Parakeet: \(parakeetHealth.message)
         """
         _ = pasteService.copyToPasteboard(details)
     }
@@ -537,61 +368,7 @@ final class AppState: ObservableObject {
         stage = .copied
     }
 
-    func refreshLLMHealth(allowsKeychainPrompt: Bool = true) async {
-        guard polishingBackend == .olmx else { return }
-
-        do {
-            let client = try makeOLMXClient()
-            let health = try await {
-                if let key = try? requireAPIKey(allowsUserInteraction: allowsKeychainPrompt) {
-                    return try await client.health(apiKey: key)
-                }
-                return try await client.health()
-            }()
-            llmStatus = health.status == "healthy" ? "OLMX healthy" : "OLMX: \(health.status)"
-            if selectedModelID.isEmpty, let defaultModel = health.defaultModel {
-                selectedModelID = defaultModel
-            }
-        } catch {
-            llmStatus = error.localizedDescription
-        }
-    }
-
-    func refreshModels(
-        setsErrorStageOnFailure: Bool = true,
-        allowsKeychainPrompt: Bool = true
-    ) async {
-        endpointURLString = endpointURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            let key = try requireAPIKey(allowsUserInteraction: allowsKeychainPrompt)
-            let client = try makeOLMXClient()
-            let fetched = try await client.models(apiKey: key)
-            models = fetched
-            try store?.cacheModels(endpointURL: endpointURLString, models: fetched)
-            adjustModelSelectionAfterModelRefresh(fetched: fetched)
-
-            llmStatus = selectedModelID.isEmpty
-                ? "Models loaded. Select one to enable polishing."
-                : "Models loaded."
-            errorMessage = nil
-            if stage == .error {
-                stage = .idle
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-            llmStatus = error.localizedDescription
-            if setsErrorStageOnFailure {
-                stage = .error
-            }
-        }
-    }
-
     func refreshSTTHealth() async {
-        parakeetHealth = parakeetDisabledHealth
-        if selectedSTTEngine == .parakeet {
-            selectedSTTEngine = .whisper
-        }
-
         guard let sttClient else { return }
         whisperHealth = await sttClient.health(engine: .whisper)
     }
@@ -658,11 +435,6 @@ final class AppState: ObservableObject {
             return
         }
 
-        guard polishingBackend == .appleFoundationModels || !selectedModelID.isEmpty else {
-            failMessage("Select an OLMX model before recording.")
-            return
-        }
-
         let overallStart = Date()
         stage = .transcribing
         recordingStatus = .processing
@@ -686,7 +458,7 @@ final class AppState: ObservableObject {
 
             stage = .polishing
             let polishStart = Date()
-            pipelineLogger.info("Pipeline polishing started with backend=\(self.polishingBackend.rawValue, privacy: .public), model=\(self.activeModelLabel, privacy: .public)")
+            pipelineLogger.info("Pipeline polishing started with backend=Apple Foundation Models, model=\(self.activeModelLabel, privacy: .public)")
             let polishResult = try await polishTranscript(
                 transcript: sttResult.rawText,
                 persona: selectedPersona
@@ -769,8 +541,8 @@ final class AppState: ObservableObject {
                     personaID: selectedPersona.id,
                     sttEngine: sttResult.engine,
                     sttModel: sttResult.model,
-                    llmEndpointURL: endpointURLString,
-                    llmModel: selectedModelID,
+                    llmEndpointURL: "apple-foundation-models",
+                    llmModel: "Apple Foundation Models",
                     transcriptionLatencyMs: sttResult.latencyMs,
                     polishingLatencyMs: 0,
                     endToEndLatencyMs: Int(Date().timeIntervalSince(overallStart) * 1000),
@@ -795,59 +567,34 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func requireAPIKey(allowsUserInteraction: Bool = true) throws -> String {
-        guard let rawKey = try keychain.read(allowsUserInteraction: allowsUserInteraction),
-              let key = Optional(rawKey).map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }),
-              !key.isEmpty else {
-            throw OLMXClientError.authenticationRequired
-        }
-        return key
-    }
-
-    private func makeOLMXClient() throws -> OLMXClient {
-        try OLMXClient(baseURLString: endpointURLString)
-    }
-
     private func polishTranscript(transcript: String, persona: Persona) async throws -> PolishingResult {
-        switch polishingBackend {
-        case .appleFoundationModels:
-            return try await polishWithAppleFoundationModelsOrFallback(transcript: transcript, persona: persona)
-        case .olmx:
-            return try await polishWithOLMX(transcript: transcript, persona: persona)
-        }
+        try await polishWithAppleFoundationModels(transcript: transcript, persona: persona)
     }
 
-    private func polishWithAppleFoundationModelsOrFallback(
+    private func polishWithAppleFoundationModels(
         transcript: String,
         persona: Persona
     ) async throws -> PolishingResult {
-        let availability = await refreshAppleFoundationAvailability(switchesToFallback: false)
+        let availability = await refreshAppleFoundationAvailability()
 
         switch availability {
         case .available:
-            do {
-                let polished = try await appleClient.polish(
-                    text: transcript,
-                    systemPrompt: persona.systemPrompt
-                )
-                return PolishingResult(
-                    text: polished,
-                    endpointLabel: "apple-foundation-models",
-                    modelLabel: "Apple Foundation Models"
-                )
-            } catch AppleFoundationModelClient.PolishingError.modelUnavailable {
-                return try await fallbackToOLMXAfterAppleUnavailable()
-            } catch {
-                pipelineLogger.error("Apple Foundation Models polishing failed: \(error.localizedDescription, privacy: .public)")
-                return try await fallbackToOLMXAfterAppleUnavailable()
-            }
+            let polished = try await appleClient.polish(
+                text: transcript,
+                systemPrompt: persona.systemPrompt
+            )
+            return PolishingResult(
+                text: polished,
+                endpointLabel: "apple-foundation-models",
+                modelLabel: "Apple Foundation Models"
+            )
 
         case .modelNotReady:
             llmStatus = "Apple Intelligence model loading..."
             recordingStatus = .retrying(attempt: 1)
             try await Task.sleep(for: .seconds(10))
 
-            if await refreshAppleFoundationAvailability(switchesToFallback: false) == .available {
+            if await refreshAppleFoundationAvailability() == .available {
                 let polished = try await appleClient.polish(
                     text: transcript,
                     systemPrompt: persona.systemPrompt
@@ -859,83 +606,11 @@ final class AppState: ObservableObject {
                 )
             }
 
-            return try await fallbackToOLMXAfterAppleUnavailable()
+            throw AppleFoundationModelClient.PolishingError.modelUnavailable
 
-        case .appleIntelligenceNotEnabled:
-            polishingBackend = .olmx
-            showPolishingFallbackNotification(message: "Enable Apple Intelligence in System Settings to use on-device polishing. Falling back to OLMX.")
-            return try await fallbackToOLMXAfterAppleUnavailable()
-
-        case .deviceNotEligible, .unavailable:
-            polishingBackend = .olmx
-            return try await fallbackToOLMXAfterAppleUnavailable()
-        }
-
-        func fallbackToOLMXAfterAppleUnavailable() async throws -> PolishingResult {
-            print("[PureVoice] Apple Foundation Models unavailable, falling back to OLMX")
-            pipelineLogger.info("Apple Foundation Models unavailable, falling back to OLMX")
-            return try await polishWithOLMX(transcript: transcript, persona: persona)
-        }
-    }
-
-    private func polishWithOLMX(transcript: String, persona: Persona) async throws -> PolishingResult {
-        guard !selectedModelID.isEmpty else {
-            throw OLMXClientError.requestFailed(0, "No OLMX model is selected for fallback polishing.")
-        }
-
-        let key = try requireAPIKey()
-        let polished = try await polishWithSingleRetry(
-            transcript: transcript,
-            persona: persona,
-            model: selectedModelID,
-            apiKey: key
-        )
-        return PolishingResult(
-            text: polished,
-            endpointLabel: endpointURLString,
-            modelLabel: selectedModelID
-        )
-    }
-
-    private func polishWithSingleRetry(
-        transcript: String,
-        persona: Persona,
-        model: String,
-        apiKey: String
-    ) async throws -> String {
-        let client = try makeOLMXClient()
-
-        do {
-            return try await client.polish(
-                transcript: transcript,
-                persona: persona,
-                model: model,
-                apiKey: apiKey
-            )
-        } catch {
-            if OLMXClient.isConnectionRefused(error) {
-                recordingStatus = .modelUnavailable
-                throw error
-            }
-
-            guard OLMXClient.isRetryablePolishFailure(error) else {
-                throw error
-            }
-
-            recordingStatus = .retrying(attempt: 1)
-            try await Task.sleep(for: .seconds(3))
-
-            do {
-                return try await client.polish(
-                    transcript: transcript,
-                    persona: persona,
-                    model: model,
-                    apiKey: apiKey
-                )
-            } catch {
-                recordingStatus = .modelUnavailable
-                throw error
-            }
+        case .appleIntelligenceNotEnabled, .deviceNotEligible, .unavailable:
+            recordingStatus = .modelUnavailable
+            throw AppleFoundationModelClient.PolishingError.generationFailed(availability.statusText)
         }
     }
 
@@ -981,25 +656,6 @@ final class AppState: ObservableObject {
     private func saveBoolConfig(_ key: String, _ value: Bool) {
         guard let data = try? JSONEncoder().encode(value), let raw = String(data: data, encoding: .utf8) else { return }
         try? store?.saveConfig(key: key, valueJSON: raw)
-    }
-
-    private func adjustModelSelectionAfterModelRefresh(fetched: [OLMXModel]) {
-        let previousSelection = selectedModelID
-
-        if !selectedModelID.isEmpty && !fetched.contains(where: { $0.id == selectedModelID }) {
-            let fallback = fetched.first?.id ?? ""
-            selectedModelID = fallback
-
-            if !fallback.isEmpty, unavailableModelNoticeShownFor != previousSelection {
-                unavailableModelNoticeShownFor = previousSelection
-                showModelFallbackNotification(switchedTo: fallback)
-            }
-            return
-        }
-
-        if selectedModelID.isEmpty {
-            selectedModelID = fetched.first?.id ?? ""
-        }
     }
 
     private func startMeteringTimer() {
@@ -1074,45 +730,4 @@ final class AppState: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
-    private func showPolishingFallbackNotification(message: String) {
-        guard !appleFallbackNoticeShown else { return }
-        appleFallbackNoticeShown = true
-
-        Task {
-            let center = UNUserNotificationCenter.current()
-            _ = try? await center.requestAuthorization(options: [.alert, .sound])
-
-            let content = UNMutableNotificationContent()
-            content.title = "Pure Voice"
-            content.body = message
-
-            let request = UNNotificationRequest(
-                identifier: "pure-voice-apple-foundation-fallback-\(UUID().uuidString)",
-                content: content,
-                trigger: nil
-            )
-            try? await center.add(request)
-        }
-    }
-
-    private func showModelFallbackNotification(switchedTo modelName: String) {
-        let message = "Previous model unavailable — switched to \(modelName)"
-        llmStatus = message
-
-        Task {
-            let center = UNUserNotificationCenter.current()
-            _ = try? await center.requestAuthorization(options: [.alert, .sound])
-
-            let content = UNMutableNotificationContent()
-            content.title = "Pure Voice"
-            content.body = message
-
-            let request = UNNotificationRequest(
-                identifier: "pure-voice-model-fallback-\(UUID().uuidString)",
-                content: content,
-                trigger: nil
-            )
-            try? await center.add(request)
-        }
-    }
 }

@@ -55,14 +55,6 @@ def import_faster_whisper():
         return None
 
 
-def import_nemo_asr():
-    try:
-        import nemo.collections.asr as nemo_asr  # type: ignore
-        return nemo_asr
-    except Exception:
-        return None
-
-
 def whisper_health():
     if os.environ.get("PURE_VOICE_STT_STUB_TEXT"):
         return {
@@ -104,31 +96,6 @@ def whisper_health():
         "engine": "whisper",
         "available": False,
         "message": "Run script/setup_stt.sh",
-        "model": None,
-    }
-
-
-def parakeet_health():
-    if os.environ.get("PURE_VOICE_PARAKEET_STUB_TEXT"):
-        return {
-            "engine": "parakeet",
-            "available": True,
-            "message": "Stub transcript configured",
-            "model": "stub",
-        }
-
-    if import_nemo_asr() is not None:
-        return {
-            "engine": "parakeet",
-            "available": True,
-            "message": "NeMo ASR ready",
-            "model": os.environ.get("PURE_VOICE_PARAKEET_MODEL", "nvidia/parakeet-tdt-0.6b-v3"),
-        }
-
-    return {
-        "engine": "parakeet",
-        "available": False,
-        "message": "Run script/setup_parakeet.sh",
         "model": None,
     }
 
@@ -191,54 +158,9 @@ def transcribe_whisper(audio_path, model_name):
             raise RuntimeError(f"Whisper unavailable. faster-whisper: {faster_error}; whisper.cpp: {cpp_error}")
 
 
-def extract_transcription_text(output):
-    if isinstance(output, (list, tuple)):
-        if not output:
-            return ""
-        return extract_transcription_text(output[0])
-    if isinstance(output, dict):
-        return str(output.get("text") or output.get("transcript") or "").strip()
-    if hasattr(output, "text"):
-        return str(output.text).strip()
-    return str(output).strip()
-
-
-def transcribe_parakeet(audio_path, model_name):
-    stub = os.environ.get("PURE_VOICE_PARAKEET_STUB_TEXT")
-    if stub:
-        return stub, "stub"
-
-    model_id = model_name or os.environ.get("PURE_VOICE_PARAKEET_MODEL", "nvidia/parakeet-tdt-0.6b-v3")
-    device = os.environ.get("PURE_VOICE_PARAKEET_DEVICE", "cpu")
-    if device == "cpu":
-        os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
-
-    nemo_asr = import_nemo_asr()
-    if nemo_asr is None:
-        raise RuntimeError("Parakeet requires NeMo ASR. Run script/setup_parakeet.sh.")
-
-    asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name=model_id)
-    if hasattr(asr_model, "eval"):
-        asr_model.eval()
-
-    if device:
-        try:
-            asr_model.to(device)
-        except Exception as device_error:
-            if device == "cpu":
-                raise
-            asr_model.to("cpu")
-            print(f"Fell back to CPU for Parakeet after device error: {device_error}", file=sys.stderr)
-
-    output = asr_model.transcribe([audio_path])
-    return extract_transcription_text(output), model_id
-
-
 def handle_health(args):
     if args.engine == "whisper":
         emit(whisper_health())
-    if args.engine == "parakeet":
-        emit(parakeet_health())
     emit({"engine": args.engine, "available": False, "message": "Unknown STT engine", "model": None}, 2)
 
 
@@ -247,8 +169,6 @@ def handle_transcribe(args):
     try:
         if args.engine == "whisper":
             raw_text, model = transcribe_whisper(args.audio, args.model)
-        elif args.engine == "parakeet":
-            raw_text, model = transcribe_parakeet(args.audio, args.model)
         else:
             raise RuntimeError(f"Unknown STT engine: {args.engine}")
 
@@ -283,11 +203,11 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     health = subparsers.add_parser("health")
-    health.add_argument("--engine", required=True, choices=["whisper", "parakeet"])
+    health.add_argument("--engine", required=True, choices=["whisper"])
     health.set_defaults(func=handle_health)
 
     transcribe = subparsers.add_parser("transcribe")
-    transcribe.add_argument("--engine", required=True, choices=["whisper", "parakeet"])
+    transcribe.add_argument("--engine", required=True, choices=["whisper"])
     transcribe.add_argument("--audio", required=True)
     transcribe.add_argument("--model", default=None)
     transcribe.set_defaults(func=handle_transcribe)
