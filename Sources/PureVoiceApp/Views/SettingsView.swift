@@ -4,7 +4,6 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var state: AppState
     @State private var selectedTab: SettingsTab = .general
-    @FocusState private var previewInputFocused: Bool
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -78,12 +77,6 @@ struct SettingsView: View {
                 TextEditor(text: $state.personaPreviewInput)
                     .font(.body)
                     .frame(minHeight: 96)
-                    .focused($previewInputFocused)
-                    .onChange(of: previewInputFocused) { _, isFocused in
-                        if !isFocused {
-                            state.submitPersonaPreviewFromBlur()
-                        }
-                    }
 
                 HStack {
                     Spacer()
@@ -91,6 +84,12 @@ struct SettingsView: View {
                         state.clearPersonaPreview()
                     }
                     .disabled(state.personaPreviewInput.isEmpty && state.personaPreviewResults.isEmpty)
+
+                    Button("Preview") {
+                        state.runPersonaPreviewFromButton()
+                    }
+                    .keyboardShortcut(.return, modifiers: [.command])
+                    .disabled(state.personaPreviewInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
                 ForEach(state.personas) { persona in
@@ -332,6 +331,13 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(state.capturingHotkeyAction != nil && state.capturingHotkeyAction != action)
+
+                if !state.hotkeyUsesDefault(for: action) {
+                    Button("Restore Default") {
+                        state.restoreDefaultHotkey(for: action)
+                    }
+                    .disabled(state.capturingHotkeyAction != nil)
+                }
             }
 
             Text(subtitle)

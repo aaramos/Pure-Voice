@@ -77,12 +77,76 @@ public enum RecordingMode: String, Codable, CaseIterable, Identifiable, Sendable
 }
 
 public struct HotkeyBinding: Codable, Equatable, Sendable {
-    public var keyCode: UInt16
+    public var keyCodes: [UInt16]
+    public var mouseButtons: [Int64]
     public var modifierFlags: UInt64
 
+    public var keyCode: UInt16 {
+        keyCodes.first ?? 0
+    }
+
     public init(keyCode: UInt16, modifierFlags: UInt64) {
-        self.keyCode = keyCode
+        self.init(
+            keyCodes: Self.normalizedKeyCodes([keyCode]),
+            mouseButtons: [],
+            modifierFlags: modifierFlags
+        )
+    }
+
+    public init(keyCodes: [UInt16] = [], mouseButtons: [Int64] = [], modifierFlags: UInt64) {
+        self.keyCodes = Self.normalizedKeyCodes(keyCodes)
+        self.mouseButtons = Self.normalizedMouseButtons(mouseButtons)
         self.modifierFlags = modifierFlags
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case keyCode
+        case keyCodes
+        case mouseButtons
+        case modifierFlags
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let modifierFlags = try container.decode(UInt64.self, forKey: .modifierFlags)
+        let decodedKeyCodes = try container.decodeIfPresent([UInt16].self, forKey: .keyCodes)
+        let decodedMouseButtons = try container.decodeIfPresent([Int64].self, forKey: .mouseButtons) ?? []
+
+        if let decodedKeyCodes {
+            self.init(keyCodes: decodedKeyCodes, mouseButtons: decodedMouseButtons, modifierFlags: modifierFlags)
+            return
+        }
+
+        if let legacyKeyCode = try container.decodeIfPresent(UInt16.self, forKey: .keyCode),
+           !Self.isModifierKey(legacyKeyCode) {
+            self.init(keyCodes: [legacyKeyCode], mouseButtons: decodedMouseButtons, modifierFlags: modifierFlags)
+        } else {
+            self.init(keyCodes: [], mouseButtons: decodedMouseButtons, modifierFlags: modifierFlags)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(keyCodes, forKey: .keyCodes)
+        try container.encode(mouseButtons, forKey: .mouseButtons)
+        try container.encode(modifierFlags, forKey: .modifierFlags)
+    }
+
+    private static func normalizedKeyCodes(_ keyCodes: [UInt16]) -> [UInt16] {
+        Array(Set(keyCodes.filter { !isModifierKey($0) })).sorted()
+    }
+
+    private static func normalizedMouseButtons(_ mouseButtons: [Int64]) -> [Int64] {
+        Array(Set(mouseButtons)).sorted()
+    }
+
+    private static func isModifierKey(_ keyCode: UInt16) -> Bool {
+        switch keyCode {
+        case 54, 55, 56, 57, 58, 59, 60, 61, 62, 63:
+            return true
+        default:
+            return false
+        }
     }
 }
 

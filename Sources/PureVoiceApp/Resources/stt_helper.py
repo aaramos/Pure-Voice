@@ -69,7 +69,7 @@ def find_parakeet_cli():
     return find_executable(str(parakeet_cli_path()), "parakeet-mlx")
 
 
-def run_checked(command, description):
+def run_checked(command, description, cwd=None):
     try:
         result = subprocess.run(
             command,
@@ -77,6 +77,7 @@ def run_checked(command, description):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            cwd=cwd,
         )
         return result
     except FileNotFoundError as exc:
@@ -293,6 +294,85 @@ def transcribe_with_whisper_cpp(audio_path, model_name):
         return output_file.read_text(encoding="utf-8").strip(), str(model_path)
 
 
+def clean_caption_text(raw_text):
+    lines = []
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.upper() == "WEBVTT":
+            continue
+        if line.isdigit():
+            continue
+        if "-->" in line:
+            continue
+        if line.startswith("NOTE"):
+            continue
+        lines.append(line)
+    return " ".join(lines).strip()
+
+
+def text_from_json(raw_text):
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return None
+
+    if isinstance(payload, dict):
+        for key in ("text", "raw_text", "transcript"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        segments = payload.get("segments")
+        if isinstance(segments, list):
+            parts = []
+            for segment in segments:
+                if isinstance(segment, dict) and isinstance(segment.get("text"), str):
+                    parts.append(segment["text"].strip())
+            if parts:
+                return " ".join(parts).strip()
+    return None
+
+
+def text_from_transcript_file(path):
+    raw_text = path.read_text(encoding="utf-8", errors="replace").strip()
+    if not raw_text:
+        return None
+    if path.suffix.lower() == ".json":
+        return text_from_json(raw_text)
+    if path.suffix.lower() in {".srt", ".vtt"}:
+        return clean_caption_text(raw_text)
+    return raw_text
+
+
+def parakeet_status_only(text):
+    lowered = text.lower()
+    status_fragments = [
+        "transcription complete",
+        "outputs saved",
+        "error writing output file",
+    ]
+    return any(fragment in lowered for fragment in status_fragments)
+
+
+def read_parakeet_transcript(output_dir, stdout_text):
+    suffix_order = [".txt", ".srt", ".vtt", ".json"]
+    for suffix in suffix_order:
+        for path in sorted(output_dir.glob(f"*{suffix}")):
+            text = text_from_transcript_file(path)
+            if text:
+                return text
+
+    text = stdout_text.strip()
+    if text.startswith("{"):
+        parsed = text_from_json(text)
+        if parsed:
+            return parsed
+    if text and not parakeet_status_only(text):
+        return text
+    return ""
+
+
 def transcribe_whisper(audio_path, model_name):
     stub = os.environ.get("PURE_VOICE_STT_STUB_TEXT")
     if stub:
@@ -317,18 +397,18 @@ def transcribe_parakeet(audio_path, model_name):
         raise RuntimeError("parakeet-mlx is not installed")
 
     model_id = model_name or os.environ.get("PURE_VOICE_PARAKEET_MODEL", PARAKEET_MODEL)
-    result = run_checked(
-        [cli, audio_path, "--model", model_id],
-        "Parakeet transcription",
-    )
-    text = result.stdout.strip()
-    if text.startswith("{"):
-        try:
-            payload = json.loads(text)
-            text = payload.get("text") or payload.get("raw_text") or text
-        except json.JSONDecodeError:
-            pass
-    return text.strip(), model_id
+    absolute_audio_path = str(Path(audio_path).resolve())
+    with tempfile.TemporaryDirectory(prefix="pure-voice-parakeet-") as temp_dir:
+        output_dir = Path(temp_dir)
+        result = run_checked(
+            [cli, absolute_audio_path, "--model", model_id],
+            "Parakeet transcription",
+            cwd=temp_dir,
+        )
+        text = read_parakeet_transcript(output_dir, result.stdout)
+        if not text:
+            raise RuntimeError("Parakeet finished without a readable transcript.")
+        return text.strip(), model_id
 
 
 def handle_health(args):

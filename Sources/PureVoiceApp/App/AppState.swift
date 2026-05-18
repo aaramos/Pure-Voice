@@ -578,7 +578,7 @@ final class AppState: ObservableObject {
         personaPreviewTasks.removeAll()
     }
 
-    func submitPersonaPreviewFromBlur() {
+    func runPersonaPreviewFromButton() {
         let trimmed = personaPreviewInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             clearPersonaPreview()
@@ -736,9 +736,13 @@ final class AppState: ObservableObject {
         HotkeyConflictDetector.warning(for: hotkeyBinding(for: action))
     }
 
+    func hotkeyUsesDefault(for action: HotkeyAction) -> Bool {
+        hotkeyBinding(for: action) == (HotkeyBinding.defaultBindings[action] ?? .defaultPushToRecord)
+    }
+
     func beginHotkeyCapture(for action: HotkeyAction) {
         capturingHotkeyAction = action
-        hotkeyCaptureStatus = "Press the new shortcut. Escape cancels."
+        hotkeyCaptureStatus = "Press the new shortcut. You can include multiple keys or mouse buttons. Escape cancels."
         hotKeyService.beginCapture { [weak self] result in
             Task { @MainActor [weak self] in
                 guard let self, self.capturingHotkeyAction == action else { return }
@@ -756,6 +760,12 @@ final class AppState: ObservableObject {
 
     func cancelHotkeyCapture() {
         hotKeyService.cancelCapture()
+    }
+
+    func restoreDefaultHotkey(for action: HotkeyAction) {
+        let binding = HotkeyBinding.defaultBindings[action] ?? .defaultPushToRecord
+        setHotkeyBinding(binding, for: action)
+        hotkeyCaptureStatus = "\(action.displayName) restored to \(binding.displayString)."
     }
 
     func toggleRecording() async {
@@ -1262,9 +1272,25 @@ final class AppState: ObservableObject {
     }
 
     func openSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         NSApp.activate(ignoringOtherApps: true)
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        bringSettingsWindowToFront()
         recordingStatus = .idle
+    }
+
+    private func bringSettingsWindowToFront() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            NSApp.activate(ignoringOtherApps: true)
+            let settingsWindows = NSApp.windows.filter { window in
+                window.title.localizedCaseInsensitiveContains("settings")
+                    || window.identifier?.rawValue.localizedCaseInsensitiveContains("settings") == true
+            }
+
+            for window in settingsWindows {
+                window.makeKeyAndOrderFront(nil)
+                window.orderFrontRegardless()
+            }
+        }
     }
 
     private func openSystemSettingsPane(_ urlString: String) {

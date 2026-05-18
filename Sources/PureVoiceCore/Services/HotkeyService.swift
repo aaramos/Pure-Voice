@@ -16,18 +16,18 @@ public enum HotkeyConflictDetector {
         let hasAnyModifier = hasCommand || hasControl || hasOption || hasShift || flags.contains(.maskSecondaryFn)
 
         if !hasAnyModifier {
-            return "This shortcut has no modifier key and may conflict with normal typing."
+            return "This shortcut has no modifier key and may conflict with normal typing or mouse clicks."
         }
 
-        if binding.keyCode == HotkeyKeyCode.space, hasCommand, !hasOption, !hasShift {
+        if binding.keyCodes.contains(HotkeyKeyCode.space), hasCommand, !hasOption, !hasShift {
             return "Command-Space is commonly reserved for Spotlight or input switching."
         }
 
-        if binding.keyCode == HotkeyKeyCode.space, hasControl, !hasCommand, !hasOption, !hasShift {
+        if binding.keyCodes.contains(HotkeyKeyCode.space), hasControl, !hasCommand, !hasOption, !hasShift {
             return "Control-Space is commonly used by macOS or text input tools."
         }
 
-        if binding.keyCode == HotkeyKeyCode.escape {
+        if binding.keyCodes.contains(HotkeyKeyCode.escape) {
             return "Escape is reserved for cancelling shortcut capture."
         }
 
@@ -46,12 +46,10 @@ public enum HotkeyKeyCode {
 
 public extension HotkeyBinding {
     static let defaultPushToRecord = HotkeyBinding(
-        keyCode: HotkeyKeyCode.rightOption,
         modifierFlags: CGEventFlags.pureVoiceRightCommandOption.rawValue
     )
 
     static let defaultPushToTalk = HotkeyBinding(
-        keyCode: HotkeyKeyCode.leftOption,
         modifierFlags: CGEventFlags.pureVoiceLeftCommandOption.rawValue
     )
 
@@ -73,9 +71,14 @@ public final class HotkeyService: @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     private var bindings: [HotkeyAction: HotkeyBinding] = HotkeyBinding.defaultBindings
     private var activeActions = Set<HotkeyAction>()
+    private var pressedKeyCodes = Set<UInt16>()
+    private var pressedMouseButtons = Set<Int64>()
     private var handler: EventHandler?
     private var captureHandler: CaptureHandler?
     private var pendingCapture: DispatchWorkItem?
+    private var captureKeyCodes = Set<UInt16>()
+    private var captureMouseButtons = Set<Int64>()
+    private var captureModifierFlags: UInt64 = 0
 
     public init() {}
 
@@ -98,11 +101,20 @@ public final class HotkeyService: @unchecked Sendable {
             return
         }
 
-        let mask = CGEventMask(
-            (1 << CGEventType.keyDown.rawValue)
-                | (1 << CGEventType.keyUp.rawValue)
-                | (1 << CGEventType.flagsChanged.rawValue)
-        )
+        let eventTypes: [CGEventType] = [
+            .keyDown,
+            .keyUp,
+            .flagsChanged,
+            .leftMouseDown,
+            .leftMouseUp,
+            .rightMouseDown,
+            .rightMouseUp,
+            .otherMouseDown,
+            .otherMouseUp
+        ]
+        let mask = eventTypes.reduce(CGEventMask(0)) { partialMask, eventType in
+            partialMask | (CGEventMask(1) << CGEventMask(eventType.rawValue))
+        }
 
         let callback: CGEventTapCallBack = { _, type, event, refcon in
             guard let refcon else {
@@ -139,6 +151,9 @@ public final class HotkeyService: @unchecked Sendable {
     public func beginCapture(handler: @escaping CaptureHandler) {
         pendingCapture?.cancel()
         pendingCapture = nil
+        captureKeyCodes.removeAll()
+        captureMouseButtons.removeAll()
+        captureModifierFlags = 0
         captureHandler = handler
     }
 
@@ -151,6 +166,11 @@ public final class HotkeyService: @unchecked Sendable {
         pendingCapture = nil
         captureHandler = nil
         activeActions.removeAll()
+        pressedKeyCodes.removeAll()
+        pressedMouseButtons.removeAll()
+        captureKeyCodes.removeAll()
+        captureMouseButtons.removeAll()
+        captureModifierFlags = 0
 
         if let runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
@@ -179,7 +199,7 @@ public final class HotkeyService: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
 
-        guard type == .keyDown || type == .keyUp || type == .flagsChanged else {
+        guard Self.isHandledEvent(type) else {
             return Unmanaged.passUnretained(event)
         }
 
@@ -201,26 +221,40 @@ public final class HotkeyService: @unchecked Sendable {
         }
 
         if type == .keyDown {
-            pendingCapture?.cancel()
-            let binding = HotkeyBinding(
-                keyCode: keyCode,
-                modifierFlags: Self.normalizedModifiers(from: event).rawValue
-            )
-            finishCapture(.captured(binding))
+            if !Self.isModifierKey(keyCode) {
+                captureKeyCodes.insert(keyCode)
+            }
+            captureModifierFlags = Self.normalizedModifiers(from: event).rawValue
+            scheduleCaptureFinish()
+            return
+        }
+
+        if Self.isMouseDown(type) {
+            captureMouseButtons.insert(Self.mouseButton(from: event))
+            captureModifierFlags = Self.normalizedModifiers(from: event).rawValue
+            scheduleCaptureFinish()
             return
         }
 
         guard type == .flagsChanged else { return }
-        let modifiers = Self.normalizedModifiers(from: event)
-        guard !modifiers.isEmpty else { return }
+        captureModifierFlags = Self.normalizedModifiers(from: event).rawValue
+        guard captureModifierFlags != 0 else { return }
+        scheduleCaptureFinish()
+    }
 
+    private func scheduleCaptureFinish() {
         pendingCapture?.cancel()
-        let binding = HotkeyBinding(keyCode: keyCode, modifierFlags: modifiers.rawValue)
         let workItem = DispatchWorkItem { [weak self] in
-            self?.finishCapture(.captured(binding))
+            guard let self else { return }
+            let binding = HotkeyBinding(
+                keyCodes: Array(self.captureKeyCodes),
+                mouseButtons: Array(self.captureMouseButtons),
+                modifierFlags: self.captureModifierFlags
+            )
+            self.finishCapture(.captured(binding))
         }
         pendingCapture = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65, execute: workItem)
     }
 
     private func finishCapture(_ result: HotkeyCaptureResult) {
@@ -228,6 +262,9 @@ public final class HotkeyService: @unchecked Sendable {
         pendingCapture = nil
         guard let captureHandler else { return }
         self.captureHandler = nil
+        captureKeyCodes.removeAll()
+        captureMouseButtons.removeAll()
+        captureModifierFlags = 0
         captureHandler(result)
     }
 
@@ -237,63 +274,107 @@ public final class HotkeyService: @unchecked Sendable {
             return
         }
 
+        updatePressedState(type: type, event: event)
+        let modifiers = Self.normalizedModifiers(from: event)
         let matchedActions = Set(bindings.compactMap { action, binding in
-            matches(binding, type: type, event: event) ? action : nil
+            matches(binding, modifiers: modifiers) ? action : nil
         })
 
-        if type == .keyDown || type == .flagsChanged {
+        if type == .keyDown || type == .flagsChanged || Self.isMouseDown(type) {
             for action in matchedActions where !activeActions.contains(action) {
                 activeActions.insert(action)
                 handler?(action, .keyDown)
             }
 
-            for action in activeActions.subtracting(matchedActions) where shouldRelease(action, type: type, event: event) {
+            for action in activeActions.subtracting(matchedActions) {
                 activeActions.remove(action)
                 handler?(action, .keyUp)
             }
             return
         }
 
-        if type == .keyUp {
-            for action in activeActions where shouldRelease(action, type: type, event: event) {
+        if type == .keyUp || Self.isMouseUp(type) {
+            for action in activeActions.subtracting(matchedActions) {
                 activeActions.remove(action)
                 handler?(action, .keyUp)
             }
         }
     }
 
-    private func matches(_ binding: HotkeyBinding, type: CGEventType, event: CGEvent) -> Bool {
-        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        let modifiers = Self.normalizedModifiers(from: event)
-
+    private func updatePressedState(type: CGEventType, event: CGEvent) {
         if type == .keyDown {
-            return keyCode == binding.keyCode && modifiers.rawValue == binding.modifierFlags
+            let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+            if !Self.isModifierKey(keyCode) {
+                pressedKeyCodes.insert(keyCode)
+            }
+            return
         }
-
-        if type == .flagsChanged {
-            return keyCode == binding.keyCode && modifiers.rawValue == binding.modifierFlags
-        }
-
-        return false
-    }
-
-    private func shouldRelease(_ action: HotkeyAction, type: CGEventType, event: CGEvent) -> Bool {
-        guard let binding = bindings[action] else { return true }
-        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
 
         if type == .keyUp {
-            return keyCode == binding.keyCode
+            pressedKeyCodes.remove(UInt16(event.getIntegerValueField(.keyboardEventKeycode)))
+            return
         }
 
-        if type == .flagsChanged {
-            return !matches(binding, type: type, event: event)
+        if Self.isMouseDown(type) {
+            pressedMouseButtons.insert(Self.mouseButton(from: event))
+            return
         }
 
-        return false
+        if Self.isMouseUp(type) {
+            pressedMouseButtons.remove(Self.mouseButton(from: event))
+        }
+    }
+
+    private func matches(_ binding: HotkeyBinding, modifiers: CGEventFlags) -> Bool {
+        guard binding.modifierFlags == modifiers.rawValue else {
+            return false
+        }
+
+        let requiredKeyCodes = Set(binding.keyCodes)
+        let requiredMouseButtons = Set(binding.mouseButtons)
+        guard requiredKeyCodes.isSubset(of: pressedKeyCodes),
+              requiredMouseButtons.isSubset(of: pressedMouseButtons) else {
+            return false
+        }
+
+        return binding.modifierFlags != 0 || !requiredKeyCodes.isEmpty || !requiredMouseButtons.isEmpty
     }
 
     private static func normalizedModifiers(from event: CGEvent) -> CGEventFlags {
         event.flags.intersection(.pureVoiceModifierMask)
+    }
+
+    private static func isHandledEvent(_ type: CGEventType) -> Bool {
+        switch type {
+        case .keyDown, .keyUp, .flagsChanged,
+             .leftMouseDown, .leftMouseUp,
+             .rightMouseDown, .rightMouseUp,
+             .otherMouseDown, .otherMouseUp:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func isMouseDown(_ type: CGEventType) -> Bool {
+        type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown
+    }
+
+    private static func isMouseUp(_ type: CGEventType) -> Bool {
+        type == .leftMouseUp || type == .rightMouseUp || type == .otherMouseUp
+    }
+
+    private static func mouseButton(from event: CGEvent) -> Int64 {
+        event.getIntegerValueField(.mouseEventButtonNumber)
+    }
+
+    private static func isModifierKey(_ keyCode: UInt16) -> Bool {
+        switch keyCode {
+        case 54, 55, 56, 57, 58, 59, 60, 61, 62, 63:
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -347,8 +428,14 @@ private enum HotkeyFormatter {
             parts.append("fn")
         }
 
-        if let key = keyName(for: binding.keyCode), !isModifierKey(binding.keyCode) {
-            parts.append(key)
+        for keyCode in binding.keyCodes where !isModifierKey(keyCode) {
+            if let key = keyName(for: keyCode) {
+                parts.append(key)
+            }
+        }
+
+        for button in binding.mouseButtons {
+            parts.append(mouseName(for: button))
         }
 
         return parts.isEmpty ? "Unassigned" : parts.joined(separator: " + ")
@@ -418,6 +505,15 @@ private enum HotkeyFormatter {
         case 46: return "M"
         default:
             return "Key \(keyCode)"
+        }
+    }
+
+    private static func mouseName(for button: Int64) -> String {
+        switch button {
+        case 0: return "Mouse 1"
+        case 1: return "Mouse 2"
+        case 2: return "Mouse 3"
+        default: return "Mouse \(button + 1)"
         }
     }
 }

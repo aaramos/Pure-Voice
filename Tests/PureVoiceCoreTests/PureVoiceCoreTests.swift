@@ -344,6 +344,41 @@ final class PureVoiceCoreTests: XCTestCase {
         XCTAssertEqual(HotkeyBinding.defaultPushToTalk.displayString, "left ⌘ + left ⌥")
     }
 
+    func testHotkeyBindingSupportsMultiKeyAndMouseDisplay() {
+        let binding = HotkeyBinding(
+            keyCodes: [13, 12],
+            mouseButtons: [2],
+            modifierFlags: CGEventFlags.maskCommand.rawValue
+        )
+
+        XCTAssertEqual(binding.displayString, "⌘ + Q + W + Mouse 3")
+    }
+
+    func testHotkeyBindingDecodesLegacySavedShortcutShape() throws {
+        let spaceJSON = """
+        {
+          "keyCode": \(HotkeyKeyCode.space),
+          "modifierFlags": \(CGEventFlags.maskCommand.rawValue)
+        }
+        """.data(using: .utf8)!
+        let spaceBinding = try JSONDecoder().decode(HotkeyBinding.self, from: spaceJSON)
+
+        XCTAssertEqual(spaceBinding.keyCodes, [HotkeyKeyCode.space])
+        XCTAssertEqual(spaceBinding.mouseButtons, [])
+        XCTAssertEqual(spaceBinding.modifierFlags, CGEventFlags.maskCommand.rawValue)
+
+        let modifierOnlyJSON = """
+        {
+          "keyCode": \(HotkeyKeyCode.leftOption),
+          "modifierFlags": \(CGEventFlags.maskAlternate.rawValue)
+        }
+        """.data(using: .utf8)!
+        let modifierOnlyBinding = try JSONDecoder().decode(HotkeyBinding.self, from: modifierOnlyJSON)
+
+        XCTAssertEqual(modifierOnlyBinding.keyCodes, [])
+        XCTAssertEqual(modifierOnlyBinding.mouseButtons, [])
+    }
+
     func testHotkeyConflictDetectorWarnsButAllowsReservedShortcuts() {
         let commandSpace = HotkeyBinding(
             keyCode: HotkeyKeyCode.space,
