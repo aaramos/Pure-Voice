@@ -69,7 +69,10 @@ final class AppState: ObservableObject {
     @Published var llmStatus = "Not checked"
     @Published var appleFoundationAvailability = AppleFoundationModelClient.availability
     @Published var whisperHealth = STTHealth(engine: "whisper", available: false, message: "Not checked")
+    @Published var parakeetHealth = STTHealth(engine: "parakeet", available: false, message: "Not checked")
     @Published var sttInstallInProgress = false
+    @Published var sttInstallStatus: String?
+    @Published var sttNotice: String?
     @Published var transcriptPreview = ""
     @Published var polishedPreview = ""
     @Published var errorMessage: String?
@@ -98,6 +101,7 @@ final class AppState: ObservableObject {
     private var store: SQLiteStore?
     private var sttClient: STTHelperClient?
     private var activeAudioURL: URL?
+    private var activeRecordingSTTEngine: STTEngine?
     private var originalTarget: FocusTarget?
     private var loaded = false
     private var meteringTimer: Timer?
@@ -130,7 +134,12 @@ final class AppState: ObservableObject {
     }
 
     var canUseSelectedSTTEngine: Bool {
-        whisperHealth.available
+        switch selectedSTTEngine {
+        case .whisper:
+            return whisperHealth.available
+        case .parakeet:
+            return parakeetHealth.available
+        }
     }
 
     var appleFoundationStatusText: String {
@@ -252,6 +261,7 @@ final class AppState: ObservableObject {
             || lowered.contains("transcribe")
             || lowered.contains("helper")
             || lowered.contains("whisper")
+            || lowered.contains("parakeet")
         {
             return AttentionGuidance(
                 title: "Speech Transcription Needs Setup",
@@ -295,8 +305,7 @@ final class AppState: ObservableObject {
                 ? storedPersonaID
                 : defaultPersonaID
             if let rawEngine = readStringConfig("stt_engine"),
-               let engine = STTEngine(rawValue: rawEngine),
-               engine == .whisper {
+               let engine = STTEngine(rawValue: rawEngine) {
                 selectedSTTEngine = engine
             } else {
                 selectedSTTEngine = .whisper
@@ -463,6 +472,7 @@ final class AppState: ObservableObject {
         Polishing: \(activeModelLabel)
         Apple Intelligence: \(llmStatus)
         Whisper: \(whisperHealth.message)
+        Parakeet: \(parakeetHealth.message)
         """
         _ = pasteService.copyToPasteboard(details)
     }
@@ -477,38 +487,75 @@ final class AppState: ObservableObject {
     func refreshSTTHealth() async {
         guard let sttClient else { return }
         guard !sttInstallInProgress else { return }
-        whisperHealth = await sttClient.health(engine: .whisper)
+        async let whisper = sttClient.health(engine: .whisper)
+        async let parakeet = sttClient.health(engine: .parakeet)
+        whisperHealth = await whisper
+        parakeetHealth = await parakeet
     }
 
     func ensureSTTDependencies() async {
         guard let sttClient else { return }
         guard !sttInstallInProgress else { return }
 
-        let health = await sttClient.health(engine: .whisper)
-        whisperHealth = health
+        async let whisper = sttClient.health(engine: .whisper)
+        async let parakeet = sttClient.health(engine: .parakeet)
+        let whisperResult = await whisper
+        whisperHealth = whisperResult
+        parakeetHealth = await parakeet
 
-        guard !health.available else { return }
-        await installSTTDependencies()
+        guard !whisperResult.available else { return }
+        await installSTTDependencies(engine: .whisper)
     }
 
-    func installSTTDependencies() async {
+    func installSTTDependencies(engine: STTEngine = .whisper) async {
         guard let sttClient else { return }
         guard !sttInstallInProgress else { return }
 
         sttInstallInProgress = true
-        whisperHealth = STTHealth(engine: "whisper", available: false, message: "Installing Whisper...")
-        defer { sttInstallInProgress = false }
+        sttInstallStatus = "Starting \(engine.displayName) install..."
+        setSTTHealth(STTHealth(engine: engine.rawValue, available: false, message: "Installing \(engine.displayName)..."))
+        defer {
+            sttInstallInProgress = false
+            sttInstallStatus = nil
+        }
 
-        let health = await sttClient.install(engine: .whisper)
-        whisperHealth = health
+        let health = await sttClient.install(engine: engine) { [weak self] progress in
+            Task { @MainActor [weak self] in
+                self?.sttInstallStatus = progress
+            }
+        }
+        setSTTHealth(health)
 
         if health.available {
-            if stage == .error, errorMessage?.contains("Whisper setup failed") == true {
+            if stage == .error,
+               errorMessage?.localizedCaseInsensitiveContains("\(engine.displayName) setup failed") == true {
                 errorMessage = nil
                 stage = .idle
             }
         } else {
-            failMessage("Whisper setup failed: \(health.message)")
+            if engine == .whisper {
+                failMessage("\(engine.displayName) setup failed: \(health.message)")
+            } else {
+                sttNotice = "\(engine.displayName) setup failed: \(health.message)"
+            }
+        }
+    }
+
+    func selectSTTEngine(_ engine: STTEngine) async {
+        selectedSTTEngine = engine
+        sttNotice = nil
+
+        guard engine == .parakeet else { return }
+        await refreshSTTHealth()
+        guard !parakeetHealth.available else { return }
+
+        if confirmParakeetInstall(reason: "Parakeet needs to be installed before Pure Voice can use it.") {
+            await installSTTDependencies(engine: .parakeet)
+            if !parakeetHealth.available {
+                sttNotice = "Parakeet could not be installed. Pure Voice will use Whisper until Parakeet is resolved."
+            }
+        } else {
+            sttNotice = "Parakeet is selected but not installed. Pure Voice will ask again before recording."
         }
     }
 
@@ -593,6 +640,43 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func resolveSTTEngineForRecording() async -> STTEngine? {
+        switch selectedSTTEngine {
+        case .whisper:
+            guard whisperHealth.available else {
+                failMessage("Whisper is not available. Check STT setup.")
+                return nil
+            }
+            return .whisper
+
+        case .parakeet:
+            await refreshSTTHealth()
+            if parakeetHealth.available {
+                sttNotice = nil
+                return .parakeet
+            }
+
+            guard confirmParakeetInstall(reason: "Parakeet is selected but is not installed yet.") else {
+                sttNotice = "Parakeet is selected but not installed. Recording was not started."
+                return nil
+            }
+
+            await installSTTDependencies(engine: .parakeet)
+            if parakeetHealth.available {
+                sttNotice = nil
+                return .parakeet
+            }
+
+            if whisperHealth.available {
+                sttNotice = "Parakeet is unavailable, so this recording will use Whisper."
+                return .whisper
+            }
+
+            failMessage("Parakeet is unavailable and Whisper fallback is not ready.")
+            return nil
+        }
+    }
+
     func startRecording() async {
         let targetAtGesture = pasteService.captureFocus()
         let micAllowed = await audioRecorder.requestPermission()
@@ -601,8 +685,7 @@ final class AppState: ObservableObject {
             return
         }
 
-        guard canUseSelectedSTTEngine else {
-            failMessage("\(selectedSTTEngine.displayName) is not available. Check STT setup.")
+        guard let recordingEngine = await resolveSTTEngineForRecording() else {
             return
         }
 
@@ -613,6 +696,7 @@ final class AppState: ObservableObject {
             lastPasteStatus = nil
             lastPasteFallbackReason = nil
             originalTarget = targetAtGesture
+            activeRecordingSTTEngine = recordingEngine
             activeAudioURL = try audioRecorder.startRecording()
             waveformLevels = Array(repeating: 4, count: 38)
             startMeteringTimer()
@@ -629,6 +713,8 @@ final class AppState: ObservableObject {
             failMessage("No recording was available to process.")
             return
         }
+        let recordingEngine = activeRecordingSTTEngine ?? selectedSTTEngine
+        defer { activeRecordingSTTEngine = nil }
 
         let overallStart = Date()
         stage = .transcribing
@@ -640,10 +726,10 @@ final class AppState: ObservableObject {
                 throw STTHelperError.helperMissing("stt_helper.py")
             }
 
-            pipelineLogger.info("Pipeline transcribe started using \(self.selectedSTTEngine.rawValue, privacy: .public)")
+            pipelineLogger.info("Pipeline transcribe started using \(recordingEngine.rawValue, privacy: .public)")
             let sttResult = try await sttClient.transcribe(
                 audioURL: audioURL,
-                engine: selectedSTTEngine,
+                engine: recordingEngine,
                 model: nil
             )
             fallbackSTTResult = sttResult
@@ -875,6 +961,17 @@ final class AppState: ObservableObject {
         try? store?.saveConfig(key: key, valueJSON: raw)
     }
 
+    private func setSTTHealth(_ health: STTHealth) {
+        switch STTEngine(rawValue: health.engine) {
+        case .whisper:
+            whisperHealth = health
+        case .parakeet:
+            parakeetHealth = health
+        case nil:
+            break
+        }
+    }
+
     private func setHotkeyBinding(_ binding: HotkeyBinding, for action: HotkeyAction) {
         hotkeyBindings[action] = binding
         saveHotkeyBindingConfig(binding, for: action)
@@ -888,6 +985,18 @@ final class AppState: ObservableObject {
 
     private func hotkeyConfigKey(for action: HotkeyAction) -> String {
         "hotkey_\(action.rawValue)"
+    }
+
+    private func confirmParakeetInstall(reason: String) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.messageText = "Install Parakeet?"
+        alert.informativeText = "\(reason)\n\nPure Voice will install parakeet-mlx and prepare the selected speech-to-text engine. You can keep using Whisper if you do not want to install it now."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Install Parakeet")
+        alert.addButton(withTitle: "Not Now")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func startMeteringTimer() {

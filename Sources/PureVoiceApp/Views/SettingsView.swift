@@ -104,13 +104,39 @@ struct SettingsView: View {
     private var sttSection: some View {
         GroupBox("Speech To Text") {
             VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    Text("Engine")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 70, alignment: .leading)
+
+                    ForEach(STTEngine.allCases) { engine in
+                        Button {
+                            Task { await state.selectSTTEngine(engine) }
+                        } label: {
+                            Label(
+                                engine.displayName,
+                                systemImage: state.selectedSTTEngine == engine ? "largecircle.fill.circle" : "circle"
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(state.sttInstallInProgress)
+                    }
+                }
+
                 healthRow("Whisper", health: state.whisperHealth)
+                healthRow("Parakeet", health: state.parakeetHealth)
+
+                if let notice = state.sttNotice {
+                    Label(notice, systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 HStack {
                     if state.sttInstallInProgress {
                         ProgressView()
                             .controlSize(.small)
-                        Text("Installing Whisper...")
+                        Text(state.sttInstallStatus ?? "Installing...")
                             .foregroundStyle(.secondary)
                     }
 
@@ -121,14 +147,23 @@ struct SettingsView: View {
                     }
                     .disabled(state.sttInstallInProgress)
 
-                    if !state.whisperHealth.available {
-                        Button("Install Whisper") {
-                            Task { await state.installSTTDependencies() }
+                    if selectedEngineNeedsInstall {
+                        Button("Install \(state.selectedSTTEngine.displayName)") {
+                            Task { await state.installSTTDependencies(engine: state.selectedSTTEngine) }
                         }
                         .disabled(state.sttInstallInProgress)
                     }
                 }
             }
+        }
+    }
+
+    private var selectedEngineNeedsInstall: Bool {
+        switch state.selectedSTTEngine {
+        case .whisper:
+            return !state.whisperHealth.available
+        case .parakeet:
+            return !state.parakeetHealth.available
         }
     }
 

@@ -24,12 +24,14 @@ public enum AppStage: String, Codable, CaseIterable, Sendable {
 
 public enum STTEngine: String, Codable, CaseIterable, Identifiable, Sendable {
     case whisper
+    case parakeet
 
     public var id: String { rawValue }
 
     public var displayName: String {
         switch self {
         case .whisper: "Whisper"
+        case .parakeet: "Parakeet"
         }
     }
 }

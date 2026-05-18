@@ -20,6 +20,7 @@ public enum STTHelperError: Error, LocalizedError, Equatable {
 public final class STTHelperClient: @unchecked Sendable {
     private let helperURL: URL
     private let decoder = JSONDecoder()
+    public typealias ProgressHandler = @Sendable (String) -> Void
 
     public init(helperURL: URL) {
         self.helperURL = helperURL
@@ -41,10 +42,10 @@ public final class STTHelperClient: @unchecked Sendable {
         }
     }
 
-    public func install(engine: STTEngine) async -> STTHealth {
+    public func install(engine: STTEngine, onProgress: ProgressHandler? = nil) async -> STTHealth {
         do {
             let data = try await Task.detached {
-                try self.runHelper(arguments: ["install", "--engine", engine.rawValue])
+                try self.runHelper(arguments: ["install", "--engine", engine.rawValue], onProgress: onProgress)
             }.value
             return try decoder.decode(STTHealth.self, from: data)
         } catch {
@@ -82,7 +83,7 @@ public final class STTHelperClient: @unchecked Sendable {
         return result
     }
 
-    private func runHelper(arguments: [String]) throws -> Data {
+    private func runHelper(arguments: [String], onProgress: ProgressHandler? = nil) throws -> Data {
         guard FileManager.default.fileExists(atPath: helperURL.path) else {
             throw STTHelperError.helperMissing(helperURL.path)
         }
@@ -97,11 +98,29 @@ public final class STTHelperClient: @unchecked Sendable {
         process.standardOutput = stdout
         process.standardError = stderr
 
+        let errorBuffer = LockedDataBuffer()
+        if let onProgress {
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                errorBuffer.append(data)
+                Self.emitProgress(from: data, onProgress: onProgress)
+            }
+        }
+        defer {
+            stderr.fileHandleForReading.readabilityHandler = nil
+        }
+
         try process.run()
         process.waitUntilExit()
 
         let output = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errorOutput = stderr.fileHandleForReading.readDataToEndOfFile()
+        let errorOutput: Data
+        if onProgress == nil {
+            errorOutput = stderr.fileHandleForReading.readDataToEndOfFile()
+        } else {
+            errorOutput = errorBuffer.data()
+        }
 
         guard process.terminationStatus == 0 else {
             let message = String(data: output + errorOutput, encoding: .utf8) ?? "No helper output."
@@ -109,6 +128,18 @@ public final class STTHelperClient: @unchecked Sendable {
         }
 
         return output
+    }
+
+    private static func emitProgress(from data: Data, onProgress: ProgressHandler) {
+        guard let text = String(data: data, encoding: .utf8) else { return }
+        for line in text.split(whereSeparator: \.isNewline) {
+            guard let payload = line.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+                  let progress = object["progress"] as? String else {
+                continue
+            }
+            onProgress(progress)
+        }
     }
 
     private func makeHelperEnvironment() -> [String: String] {
@@ -119,5 +150,22 @@ public final class STTHelperClient: @unchecked Sendable {
         try? FileManager.default.createDirectory(at: matplotlibConfig, withIntermediateDirectories: true)
         environment["MPLCONFIGDIR"] = matplotlibConfig.path
         return environment
+    }
+}
+
+private final class LockedDataBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = Data()
+
+    func append(_ data: Data) {
+        lock.lock()
+        storage.append(data)
+        lock.unlock()
+    }
+
+    func data() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
     }
 }

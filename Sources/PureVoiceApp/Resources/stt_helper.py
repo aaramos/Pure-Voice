@@ -16,6 +16,7 @@ VENV_DIR = STT_DIR / ".venv"
 VENV_PYTHON = VENV_DIR / "bin" / "python"
 WHISPER_CPP_MODEL = APP_SUPPORT / "Models" / "whisper.cpp" / "ggml-base.en.bin"
 MPLCONFIG_DIR = STT_DIR / "matplotlib"
+PARAKEET_MODEL = "mlx-community/parakeet-tdt-0.6b-v2"
 
 try:
     MPLCONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -38,6 +39,10 @@ def emit(payload, exit_code=0):
     raise SystemExit(exit_code)
 
 
+def emit_progress(message):
+    print(json.dumps({"progress": message}, ensure_ascii=False), file=sys.stderr, flush=True)
+
+
 def find_executable(*names):
     for name in names:
         if os.path.isabs(name) and Path(name).exists():
@@ -54,6 +59,14 @@ def import_faster_whisper():
         return WhisperModel
     except Exception:
         return None
+
+
+def parakeet_cli_path():
+    return VENV_DIR / "bin" / "parakeet-mlx"
+
+
+def find_parakeet_cli():
+    return find_executable(str(parakeet_cli_path()), "parakeet-mlx")
 
 
 def run_checked(command, description):
@@ -73,6 +86,26 @@ def run_checked(command, description):
         if len(output) > 4000:
             output = output[-4000:]
         raise RuntimeError(f"{description} failed: {output or exc}") from exc
+
+
+def create_or_reuse_venv():
+    STT_DIR.mkdir(parents=True, exist_ok=True)
+    MPLCONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    prepare_venv_dir()
+
+    if VENV_PYTHON.exists():
+        return
+
+    uv = find_executable("uv")
+    if uv:
+        run_checked([uv, "venv", str(VENV_DIR), "--python", "python3.12"], "Creating STT Python environment")
+        return
+
+    python_bin = find_executable("python3.12", "python3.11", "python3")
+    if not python_bin:
+        raise RuntimeError("Python 3 was not found. Install Python 3, then reopen Pure Voice.")
+    run_checked([python_bin, "-m", "venv", str(VENV_DIR)], "Creating STT Python environment")
+    run_checked([str(VENV_PYTHON), "-m", "pip", "install", "--upgrade", "pip"], "Updating pip")
 
 
 def verify_venv_whisper_health():
@@ -144,33 +177,75 @@ def whisper_health():
     }
 
 
+def parakeet_health():
+    if os.environ.get("PURE_VOICE_STT_STUB_TEXT"):
+        return {
+            "engine": "parakeet",
+            "available": True,
+            "message": "Stub transcript configured",
+            "model": "stub",
+        }
+
+    if find_parakeet_cli():
+        return {
+            "engine": "parakeet",
+            "available": True,
+            "message": "parakeet-mlx ready",
+            "model": os.environ.get("PURE_VOICE_PARAKEET_MODEL", PARAKEET_MODEL),
+        }
+
+    return {
+        "engine": "parakeet",
+        "available": False,
+        "message": "Parakeet is not installed",
+        "model": None,
+    }
+
+
 def install_whisper():
     current_health = whisper_health()
     if current_health.get("available"):
         return current_health
 
-    STT_DIR.mkdir(parents=True, exist_ok=True)
-    MPLCONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    prepare_venv_dir()
+    create_or_reuse_venv()
 
     uv = find_executable("uv")
     if uv:
-        run_checked([uv, "venv", str(VENV_DIR), "--python", "python3.12"], "Creating Whisper Python environment")
         run_checked(
             [uv, "pip", "install", "--python", str(VENV_PYTHON), "faster-whisper"],
             "Installing faster-whisper",
         )
     else:
-        python_bin = find_executable("python3.12", "python3.11", "python3")
-        if not python_bin:
-            raise RuntimeError("Python 3 was not found. Install Python 3, then reopen Pure Voice.")
-        run_checked([python_bin, "-m", "venv", str(VENV_DIR)], "Creating Whisper Python environment")
-        run_checked([str(VENV_PYTHON), "-m", "pip", "install", "--upgrade", "pip"], "Updating pip")
         run_checked([str(VENV_PYTHON), "-m", "pip", "install", "faster-whisper"], "Installing faster-whisper")
 
     health = verify_venv_whisper_health()
     if health.get("available"):
         health["message"] = "faster-whisper installed"
+    return health
+
+
+def install_parakeet():
+    current_health = parakeet_health()
+    if current_health.get("available"):
+        return current_health
+
+    emit_progress("Preparing Parakeet environment...")
+    create_or_reuse_venv()
+
+    emit_progress("Installing parakeet-mlx...")
+    uv = find_executable("uv")
+    if uv:
+        run_checked(
+            [uv, "pip", "install", "--python", str(VENV_PYTHON), "-U", "parakeet-mlx"],
+            "Installing parakeet-mlx",
+        )
+    else:
+        run_checked([str(VENV_PYTHON), "-m", "pip", "install", "-U", "parakeet-mlx"], "Installing parakeet-mlx")
+
+    emit_progress("Checking Parakeet...")
+    health = parakeet_health()
+    if health.get("available"):
+        health["message"] = "parakeet-mlx installed"
     return health
 
 
@@ -232,9 +307,35 @@ def transcribe_whisper(audio_path, model_name):
             raise RuntimeError(f"Whisper unavailable. faster-whisper: {faster_error}; whisper.cpp: {cpp_error}")
 
 
+def transcribe_parakeet(audio_path, model_name):
+    stub = os.environ.get("PURE_VOICE_STT_STUB_TEXT")
+    if stub:
+        return stub, "stub"
+
+    cli = find_parakeet_cli()
+    if not cli:
+        raise RuntimeError("parakeet-mlx is not installed")
+
+    model_id = model_name or os.environ.get("PURE_VOICE_PARAKEET_MODEL", PARAKEET_MODEL)
+    result = run_checked(
+        [cli, audio_path, "--model", model_id],
+        "Parakeet transcription",
+    )
+    text = result.stdout.strip()
+    if text.startswith("{"):
+        try:
+            payload = json.loads(text)
+            text = payload.get("text") or payload.get("raw_text") or text
+        except json.JSONDecodeError:
+            pass
+    return text.strip(), model_id
+
+
 def handle_health(args):
     if args.engine == "whisper":
         emit(whisper_health())
+    if args.engine == "parakeet":
+        emit(parakeet_health())
     emit({"engine": args.engine, "available": False, "message": "Unknown STT engine", "model": None}, 2)
 
 
@@ -242,6 +343,8 @@ def handle_install(args):
     try:
         if args.engine == "whisper":
             health = install_whisper()
+        elif args.engine == "parakeet":
+            health = install_parakeet()
         else:
             raise RuntimeError(f"Unknown STT engine: {args.engine}")
 
@@ -263,6 +366,8 @@ def handle_transcribe(args):
     try:
         if args.engine == "whisper":
             raw_text, model = transcribe_whisper(args.audio, args.model)
+        elif args.engine == "parakeet":
+            raw_text, model = transcribe_parakeet(args.audio, args.model)
         else:
             raise RuntimeError(f"Unknown STT engine: {args.engine}")
 
@@ -297,15 +402,15 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     health = subparsers.add_parser("health")
-    health.add_argument("--engine", required=True, choices=["whisper"])
+    health.add_argument("--engine", required=True, choices=["whisper", "parakeet"])
     health.set_defaults(func=handle_health)
 
     install = subparsers.add_parser("install")
-    install.add_argument("--engine", required=True, choices=["whisper"])
+    install.add_argument("--engine", required=True, choices=["whisper", "parakeet"])
     install.set_defaults(func=handle_install)
 
     transcribe = subparsers.add_parser("transcribe")
-    transcribe.add_argument("--engine", required=True, choices=["whisper"])
+    transcribe.add_argument("--engine", required=True, choices=["whisper", "parakeet"])
     transcribe.add_argument("--audio", required=True)
     transcribe.add_argument("--model", default=None)
     transcribe.set_defaults(func=handle_transcribe)
