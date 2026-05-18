@@ -78,6 +78,9 @@ final class AppState: ObservableObject {
     @Published var availableUpdate: AppUpdateInfo?
     @Published var updateStatus = "Not checked"
     @Published var updateInProgress = false
+    @Published var hotkeyBindings: [HotkeyAction: HotkeyBinding] = HotkeyBinding.defaultBindings
+    @Published var capturingHotkeyAction: HotkeyAction?
+    @Published var hotkeyCaptureStatus: String?
     @Published var recordingStatus: RecordingStatus = .idle {
         didSet { handleRecordingStatusTransition(from: oldValue, to: recordingStatus) }
     }
@@ -88,7 +91,7 @@ final class AppState: ObservableObject {
     private let releaseClient = GitHubReleaseClient()
     private let updateInstaller = GitHubUpdateInstaller()
     private let pasteService = PasteService()
-    private let hotKeyService = HotKeyService()
+    private let hotKeyService = HotkeyService()
     private var store: SQLiteStore?
     private var sttClient: STTHelperClient?
     private var activeAudioURL: URL?
@@ -286,6 +289,7 @@ final class AppState: ObservableObject {
                 selectedSTTEngine = .whisper
             }
             saveHistory = readBoolConfig("save_history") ?? true
+            hotkeyBindings = readHotkeyBindings()
         } catch {
             errorMessage = error.localizedDescription
             stage = .error
@@ -302,11 +306,11 @@ final class AppState: ObservableObject {
         sttClient = STTHelperClient(helperURL: helperURL)
 
         hotKeyService.start(
-            onStart: { [weak self] in
-                Task { await self?.startRecordingFromHotKey() }
-            },
-            onStop: { [weak self] in
-                Task { await self?.stopRecordingFromHotKey() }
+            bindings: hotkeyBindings,
+            handler: { [weak self] action, phase in
+                Task { @MainActor [weak self] in
+                    self?.handleHotkeyEvent(action: action, phase: phase)
+                }
             }
         )
 
@@ -489,6 +493,43 @@ final class AppState: ObservableObject {
         }
     }
 
+    func hotkeyBinding(for action: HotkeyAction) -> HotkeyBinding {
+        hotkeyBindings[action] ?? HotkeyBinding.defaultBindings[action] ?? .defaultPushToRecord
+    }
+
+    func hotkeyDisplayText(for action: HotkeyAction) -> String {
+        if capturingHotkeyAction == action {
+            return "Press shortcut..."
+        }
+        return hotkeyBinding(for: action).displayString
+    }
+
+    func hotkeyWarning(for action: HotkeyAction) -> String? {
+        HotkeyConflictDetector.warning(for: hotkeyBinding(for: action))
+    }
+
+    func beginHotkeyCapture(for action: HotkeyAction) {
+        capturingHotkeyAction = action
+        hotkeyCaptureStatus = "Press the new shortcut. Escape cancels."
+        hotKeyService.beginCapture { [weak self] result in
+            Task { @MainActor [weak self] in
+                guard let self, self.capturingHotkeyAction == action else { return }
+                switch result {
+                case .captured(let binding):
+                    self.setHotkeyBinding(binding, for: action)
+                    self.hotkeyCaptureStatus = "\(action.displayName) set to \(binding.displayString)."
+                case .cancelled:
+                    self.hotkeyCaptureStatus = "Shortcut capture cancelled."
+                }
+                self.capturingHotkeyAction = nil
+            }
+        }
+    }
+
+    func cancelHotkeyCapture() {
+        hotKeyService.cancelCapture()
+    }
+
     func toggleRecording() async {
         switch stage {
         case .recording:
@@ -512,6 +553,18 @@ final class AppState: ObservableObject {
     func stopRecordingFromHotKey() async {
         guard stage == .recording else { return }
         await stopAndProcessRecording()
+    }
+
+    private func handleHotkeyEvent(action: HotkeyAction, phase: HotkeyPhase) {
+        guard capturingHotkeyAction == nil else { return }
+        guard phase == .keyDown else { return }
+
+        switch action {
+        case .pushToRecord:
+            Task { await toggleRecording() }
+        case .pushToTalk:
+            return
+        }
     }
 
     func startRecording() async {
@@ -764,6 +817,27 @@ final class AppState: ObservableObject {
         return value
     }
 
+    private func readHotkeyBindings() -> [HotkeyAction: HotkeyBinding] {
+        var bindings = HotkeyBinding.defaultBindings
+        for action in HotkeyAction.allCases {
+            if let binding = readHotkeyBindingConfig(action) {
+                bindings[action] = binding
+            }
+        }
+        return bindings
+    }
+
+    private func readHotkeyBindingConfig(_ action: HotkeyAction) -> HotkeyBinding? {
+        guard
+            let raw = try? store?.loadConfig(key: hotkeyConfigKey(for: action)),
+            let data = raw.data(using: .utf8),
+            let value = try? JSONDecoder().decode(HotkeyBinding.self, from: data)
+        else {
+            return nil
+        }
+        return value
+    }
+
     private func saveStringConfig(_ key: String, _ value: String) {
         guard let data = try? JSONEncoder().encode(value), let raw = String(data: data, encoding: .utf8) else { return }
         try? store?.saveConfig(key: key, valueJSON: raw)
@@ -772,6 +846,21 @@ final class AppState: ObservableObject {
     private func saveBoolConfig(_ key: String, _ value: Bool) {
         guard let data = try? JSONEncoder().encode(value), let raw = String(data: data, encoding: .utf8) else { return }
         try? store?.saveConfig(key: key, valueJSON: raw)
+    }
+
+    private func setHotkeyBinding(_ binding: HotkeyBinding, for action: HotkeyAction) {
+        hotkeyBindings[action] = binding
+        saveHotkeyBindingConfig(binding, for: action)
+        hotKeyService.updateBindings(hotkeyBindings)
+    }
+
+    private func saveHotkeyBindingConfig(_ binding: HotkeyBinding, for action: HotkeyAction) {
+        guard let data = try? JSONEncoder().encode(binding), let raw = String(data: data, encoding: .utf8) else { return }
+        try? store?.saveConfig(key: hotkeyConfigKey(for: action), valueJSON: raw)
+    }
+
+    private func hotkeyConfigKey(for action: HotkeyAction) -> String {
+        "hotkey_\(action.rawValue)"
     }
 
     private func startMeteringTimer() {

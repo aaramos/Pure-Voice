@@ -1,4 +1,5 @@
 import Foundation
+import ApplicationServices
 import SQLite3
 import XCTest
 @testable import PureVoiceCore
@@ -314,6 +315,20 @@ final class PureVoiceCoreTests: XCTestCase {
         XCTAssertEqual(health.engine, "whisper")
         XCTAssertEqual(health.message, "faster-whisper installed")
         XCTAssertEqual(health.model, "base.en")
+    }
+
+    func testDefaultHotkeyBindingsAreSideSpecific() {
+        XCTAssertEqual(HotkeyBinding.defaultPushToRecord.displayString, "right ⌘ + right ⌥")
+        XCTAssertEqual(HotkeyBinding.defaultPushToTalk.displayString, "left ⌘ + left ⌥")
+    }
+
+    func testHotkeyConflictDetectorWarnsButAllowsReservedShortcuts() {
+        let commandSpace = HotkeyBinding(
+            keyCode: HotkeyKeyCode.space,
+            modifierFlags: CGEventFlags.maskCommand.rawValue
+        )
+
+        XCTAssertNotNil(HotkeyConflictDetector.warning(for: commandSpace))
     }
 
     func testGitHubUpdateInfoPrefersDMGForNewerRelease() throws {

@@ -5,12 +5,48 @@ struct SettingsView: View {
     @EnvironmentObject private var state: AppState
 
     var body: some View {
+        TabView {
+            generalTab
+                .tabItem { Text("General") }
+
+            recordingTab
+                .tabItem { Text("Recording") }
+        }
+        .padding(20)
+    }
+
+    private var generalTab: some View {
         VStack(alignment: .leading, spacing: 18) {
             personaSection
             appleIntelligenceSection
             sttSection
             updateSection
             privacySection
+        }
+    }
+
+    private var recordingTab: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            GroupBox("Hotkeys") {
+                VStack(alignment: .leading, spacing: 16) {
+                    hotkeyRow(.pushToRecord, subtitle: "Start or stop a recording.")
+                    Divider()
+                    hotkeyRow(.pushToTalk, subtitle: "Reserved for hold-to-talk mode.")
+
+                    Text("Hotkeys are system-wide while Pure Voice is running.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let status = state.hotkeyCaptureStatus {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Spacer(minLength: 0)
         }
     }
 
@@ -128,5 +164,47 @@ struct SettingsView: View {
                 .lineLimit(1)
         }
         .font(.callout)
+    }
+
+    private func hotkeyRow(_ action: HotkeyAction, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(action.displayName)
+                .font(.callout.weight(.semibold))
+
+            HStack(spacing: 10) {
+                Text(action == .pushToRecord ? "Start / Stop" : "Activate")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 82, alignment: .leading)
+
+                Button {
+                    state.beginHotkeyCapture(for: action)
+                } label: {
+                    Text(state.hotkeyDisplayText(for: action))
+                        .font(.system(.body, design: .monospaced))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .disabled(state.capturingHotkeyAction != nil && state.capturingHotkeyAction != action)
+
+                Button(state.capturingHotkeyAction == action ? "Cancel" : "Record new") {
+                    if state.capturingHotkeyAction == action {
+                        state.cancelHotkeyCapture()
+                    } else {
+                        state.beginHotkeyCapture(for: action)
+                    }
+                }
+                .disabled(state.capturingHotkeyAction != nil && state.capturingHotkeyAction != action)
+            }
+
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let warning = state.hotkeyWarning(for: action) {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
     }
 }

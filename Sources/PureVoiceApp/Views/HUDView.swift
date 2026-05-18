@@ -43,7 +43,7 @@ struct HUDView: View {
                     .font(.callout)
                     .lineLimit(4)
             } else {
-                Text("Start with right Command + right Option. Stop with right Option.")
+                Text("Start with \(state.hotkeyDisplayText(for: .pushToRecord)).")
                     .foregroundStyle(.secondary)
             }
         }

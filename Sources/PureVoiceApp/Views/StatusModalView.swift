@@ -92,7 +92,7 @@ struct StatusModalView: View {
         case .idle:
             return ""
         case .recording:
-            return "Recording — press right Option to stop"
+            return "Recording — press shortcut to stop"
         case .processing:
             return "Transcribing & refining…"
         case .pastedToField:

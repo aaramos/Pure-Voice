@@ -34,6 +34,35 @@ public enum STTEngine: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+public enum HotkeyAction: String, Codable, CaseIterable, Identifiable, Sendable {
+    case pushToRecord
+    case pushToTalk
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .pushToRecord: "Push to Record"
+        case .pushToTalk: "Push to Talk"
+        }
+    }
+}
+
+public enum HotkeyPhase: String, Codable, Sendable {
+    case keyDown
+    case keyUp
+}
+
+public struct HotkeyBinding: Codable, Equatable, Sendable {
+    public var keyCode: UInt16
+    public var modifierFlags: UInt64
+
+    public init(keyCode: UInt16, modifierFlags: UInt64) {
+        self.keyCode = keyCode
+        self.modifierFlags = modifierFlags
+    }
+}
+
 public enum PasteStatus: String, Codable, Sendable {
     case pasted
     case copied
