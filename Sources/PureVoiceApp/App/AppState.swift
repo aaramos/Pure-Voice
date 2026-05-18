@@ -130,6 +130,8 @@ final class AppState: ObservableObject {
     private var lastPersonaPreviewInput = ""
     private var stalePreviewPersonaIDs = Set<String>()
     private var pushToTalkKeyDown = false
+    private var pushToTalkStartedRecording = false
+    private var pushToTalkStartTask: Task<Void, Never>?
 
     init() {
         appleFoundationAvailability = AppleFoundationModelClient.availability
@@ -232,7 +234,7 @@ final class AppState: ObservableObject {
         case .pushToRecord:
             return "Stop with \(hotkeyDisplayText(for: .pushToRecordStop))."
         case .pushToTalk:
-            return "Release \(hotkeyDisplayText(for: .pushToTalk)) to stop."
+            return "Release \(hotkeyDisplayText(for: .pushToRecord)) to stop."
         }
     }
 
@@ -801,17 +803,40 @@ final class AppState: ObservableObject {
             Task { await startRecordingFromHotKey() }
         case (.pushToRecord, .pushToRecordStop, .keyDown):
             Task { await stopRecordingFromHotKey() }
-        case (.pushToTalk, .pushToTalk, .keyDown):
-            guard !pushToTalkKeyDown else { return }
-            pushToTalkKeyDown = true
-            Task { await startRecordingFromHotKey() }
-        case (.pushToTalk, .pushToTalk, .keyUp):
-            guard pushToTalkKeyDown else { return }
-            pushToTalkKeyDown = false
-            Task { await stopRecordingFromHotKey() }
+        case (.pushToTalk, .pushToRecord, .keyDown):
+            beginPushToTalkHold()
+        case (.pushToTalk, .pushToRecord, .keyUp):
+            endPushToTalkHold()
         default:
             return
         }
+    }
+
+    private func beginPushToTalkHold() {
+        guard !pushToTalkKeyDown else { return }
+        pushToTalkKeyDown = true
+        pushToTalkStartedRecording = false
+        pushToTalkStartTask?.cancel()
+        pushToTalkStartTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.pushToTalkKeyDown else { return }
+                self.pushToTalkStartedRecording = true
+                Task { await self.startRecordingFromHotKey() }
+            }
+        }
+    }
+
+    private func endPushToTalkHold() {
+        guard pushToTalkKeyDown else { return }
+        pushToTalkKeyDown = false
+        pushToTalkStartTask?.cancel()
+        pushToTalkStartTask = nil
+
+        guard pushToTalkStartedRecording else { return }
+        pushToTalkStartedRecording = false
+        Task { await stopRecordingFromHotKey() }
     }
 
     private func resolveSTTEngineForRecording() async -> STTEngine? {
@@ -1081,6 +1106,9 @@ final class AppState: ObservableObject {
         errorMessage = message
         stage = .error
         pushToTalkKeyDown = false
+        pushToTalkStartedRecording = false
+        pushToTalkStartTask?.cancel()
+        pushToTalkStartTask = nil
         if recordingStatus != .modelUnavailable {
             recordingStatus = .idle
         }
@@ -1110,12 +1138,27 @@ final class AppState: ObservableObject {
 
     private func readHotkeyBindings() -> [HotkeyAction: HotkeyBinding] {
         var bindings = HotkeyBinding.defaultBindings
-        for action in HotkeyAction.allCases {
+        for action in configurableHotkeyActions {
             if let binding = readHotkeyBindingConfig(action) {
-                bindings[action] = binding
+                bindings[action] = migratedHotkeyBinding(binding, for: action)
             }
         }
         return bindings
+    }
+
+    private var configurableHotkeyActions: [HotkeyAction] {
+        [.pushToRecord, .pushToRecordStop]
+    }
+
+    private func migratedHotkeyBinding(_ binding: HotkeyBinding, for action: HotkeyAction) -> HotkeyBinding {
+        switch (action, binding.displayString) {
+        case (.pushToRecord, "right ⌘ + right ⌥"):
+            return .defaultPushToRecord
+        case (.pushToRecordStop, "right ⌘ + right ⌥ + Space"):
+            return .defaultPushToRecordStop
+        default:
+            return binding
+        }
     }
 
     private func readHotkeyBindingConfig(_ action: HotkeyAction) -> HotkeyBinding? {

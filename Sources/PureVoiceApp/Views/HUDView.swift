@@ -57,7 +57,7 @@ struct HUDView: View {
         case .pushToRecord:
             return "Start with \(state.hotkeyDisplayText(for: .pushToRecord))."
         case .pushToTalk:
-            return "Hold \(state.hotkeyDisplayText(for: .pushToTalk)) while speaking."
+            return "Hold \(state.hotkeyDisplayText(for: .pushToRecord)) for 1.5 seconds."
         }
     }
 }

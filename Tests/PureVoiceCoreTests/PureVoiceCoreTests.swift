@@ -344,9 +344,10 @@ final class PureVoiceCoreTests: XCTestCase {
     }
 
     func testDefaultHotkeyBindingsAreSideSpecific() {
-        XCTAssertEqual(HotkeyBinding.defaultPushToRecord.displayString, "right ⌘ + right ⌥")
-        XCTAssertEqual(HotkeyBinding.defaultPushToRecordStop.displayString, "right ⌘ + right ⌥ + Space")
-        XCTAssertEqual(HotkeyBinding.defaultPushToTalk.displayString, "left ⌘ + left ⌥")
+        XCTAssertEqual(HotkeyBinding.defaultPushToRecord.displayString, "right ⌘")
+        XCTAssertEqual(HotkeyBinding.defaultPushToRecordStop.displayString, "right ⌘ + right ⌥")
+        XCTAssertEqual(HotkeyBinding.defaultPushToTalk.displayString, HotkeyBinding.defaultPushToRecord.displayString)
+        XCTAssertNil(HotkeyBinding.defaultBindings[.pushToTalk])
     }
 
     func testHotkeyBindingSupportsMultiKeyAndMouseDisplay() {

@@ -73,7 +73,7 @@ public enum RecordingMode: String, Codable, CaseIterable, Identifiable, Sendable
     public var detail: String {
         switch self {
         case .pushToRecord: "Press the start shortcut to begin. Press the stop shortcut to finish."
-        case .pushToTalk: "Hold the shortcut while speaking. Release to stop."
+        case .pushToTalk: "Hold the Start shortcut for 1.5 seconds to begin. Release to stop."
         }
     }
 }

@@ -46,22 +46,20 @@ public enum HotkeyKeyCode {
 
 public extension HotkeyBinding {
     static let defaultPushToRecord = HotkeyBinding(
-        modifierFlags: CGEventFlags.pureVoiceRightCommandOption.rawValue
+        modifierFlags: CGEventFlags.pureVoiceRightCommandOnly.rawValue
     )
 
     static let defaultPushToRecordStop = HotkeyBinding(
-        keyCodes: [HotkeyKeyCode.space],
         modifierFlags: CGEventFlags.pureVoiceRightCommandOption.rawValue
     )
 
     static let defaultPushToTalk = HotkeyBinding(
-        modifierFlags: CGEventFlags.pureVoiceLeftCommandOption.rawValue
+        modifierFlags: CGEventFlags.pureVoiceRightCommandOnly.rawValue
     )
 
     static let defaultBindings: [HotkeyAction: HotkeyBinding] = [
         .pushToRecord: .defaultPushToRecord,
-        .pushToRecordStop: .defaultPushToRecordStop,
-        .pushToTalk: .defaultPushToTalk
+        .pushToRecordStop: .defaultPushToRecordStop
     ]
 
     var displayString: String {
@@ -599,6 +597,11 @@ private extension CGEventFlags {
         .pureVoiceRightCommand,
         .maskAlternate,
         .pureVoiceRightAlternate
+    ])
+
+    static let pureVoiceRightCommandOnly = CGEventFlags([
+        .maskCommand,
+        .pureVoiceRightCommand
     ])
 
     static let pureVoiceLeftCommandOption = CGEventFlags([

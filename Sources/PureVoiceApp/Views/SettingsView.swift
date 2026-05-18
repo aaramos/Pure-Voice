@@ -110,37 +110,47 @@ struct SettingsView: View {
     private var recordingTab: some View {
         VStack(alignment: .leading, spacing: 18) {
             GroupBox("Recording Mode") {
-                VStack(alignment: .leading, spacing: 14) {
-                    Picker("Mode", selection: $state.recordingMode) {
-                        ForEach(RecordingMode.allCases) { mode in
-                            Text(mode.displayName).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.radioGroup)
-
+                VStack(alignment: .leading, spacing: 10) {
                     ForEach(RecordingMode.allCases) { mode in
-                        if state.recordingMode == mode {
-                            Text(mode.detail)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        Button {
+                            state.recordingMode = mode
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: state.recordingMode == mode ? "largecircle.fill.circle" : "circle")
+                                    .foregroundStyle(state.recordingMode == mode ? Color.accentColor : Color.secondary)
+                                    .frame(width: 18)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(mode.displayName)
+                                        .font(.callout.weight(.semibold))
+                                    Text(mode.detail)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             GroupBox("Hotkeys") {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
                     switch state.recordingMode {
                     case .pushToRecord:
-                        hotkeyRow(.pushToRecord, label: "Start", subtitle: "Starts recording.")
+                        hotkeyRow(.pushToRecord, label: "Start")
                         Divider()
-                        hotkeyRow(.pushToRecordStop, label: "Stop", subtitle: "Stops recording and starts transcription.")
+                        hotkeyRow(.pushToRecordStop, label: "Stop")
                     case .pushToTalk:
-                        hotkeyRow(.pushToTalk, label: "Hold", subtitle: "Hold this shortcut to record. Releasing it stops recording.")
+                        pushToTalkHotkeySummary
                     }
 
-                    Text("Hotkeys are system-wide while Pure Voice is running.")
+                    Text(hotkeyFooterText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -154,6 +164,35 @@ struct SettingsView: View {
             }
 
             Spacer(minLength: 0)
+        }
+    }
+
+    private var pushToTalkHotkeySummary: some View {
+        HStack(spacing: 10) {
+            Text("Hold")
+                .foregroundStyle(.secondary)
+                .frame(width: 50, alignment: .leading)
+
+            Text(state.hotkeyDisplayText(for: .pushToRecord))
+                .font(.system(.body, design: .monospaced))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("1.5 sec")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(.secondary.opacity(0.12), in: Capsule())
+        }
+    }
+
+    private var hotkeyFooterText: String {
+        switch state.recordingMode {
+        case .pushToRecord:
+            "Start and Stop are system-wide while Pure Voice is running."
+        case .pushToTalk:
+            "Push to Talk uses the Start shortcut. Hold for 1.5 seconds to begin, release to stop."
         }
     }
 
@@ -308,15 +347,12 @@ struct SettingsView: View {
         .font(.callout)
     }
 
-    private func hotkeyRow(_ action: HotkeyAction, label: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(action.displayName)
-                .font(.callout.weight(.semibold))
-
+    private func hotkeyRow(_ action: HotkeyAction, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
                 Text(label)
                     .foregroundStyle(.secondary)
-                    .frame(width: 82, alignment: .leading)
+                    .frame(width: 50, alignment: .leading)
 
                 Button {
                     state.beginHotkeyCapture(for: action)
@@ -328,7 +364,7 @@ struct SettingsView: View {
                 }
                 .disabled(state.capturingHotkeyAction != nil && state.capturingHotkeyAction != action)
 
-                Button(state.capturingHotkeyAction == action ? "Cancel" : "Record new") {
+                Button(state.capturingHotkeyAction == action ? "Cancel" : "Change") {
                     if state.capturingHotkeyAction == action {
                         state.cancelHotkeyCapture()
                     } else {
@@ -344,10 +380,6 @@ struct SettingsView: View {
                     .disabled(state.capturingHotkeyAction != nil)
                 }
             }
-
-            Text(subtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
 
             if let warning = state.hotkeyWarning(for: action) {
                 Label(warning, systemImage: "exclamationmark.triangle.fill")
