@@ -6,6 +6,7 @@ public final class PasteService: @unchecked Sendable {
     private let targetLock = NSLock()
     private var activationObserver: NSObjectProtocol?
     private var lastExternalTarget: FocusTarget?
+    private var lastFocusedInput: CapturedFocusedInput?
 
     public init() {
         rememberFrontmostApplication()
@@ -33,8 +34,18 @@ public final class PasteService: @unchecked Sendable {
     }
 
     public func captureFocus() -> FocusTarget? {
+        if let focusedInput = focusedApplicationTarget() {
+            storeLastExternalTarget(focusedInput.target, focusedInput: focusedInput)
+            return focusedInput.target
+        }
+
         if let target = focusTarget(from: NSWorkspace.shared.frontmostApplication) {
-            storeLastExternalTarget(target)
+            storeLastExternalTarget(target, focusedInput: nil)
+            return target
+        }
+
+        if let target = currentApplicationTarget(from: NSWorkspace.shared.frontmostApplication) {
+            storeLastExternalTarget(target, focusedInput: nil)
             return target
         }
 
@@ -70,6 +81,10 @@ public final class PasteService: @unchecked Sendable {
         }
 
         Thread.sleep(forTimeInterval: 0.2)
+        if writeDirectlyToCapturedInput(text, target: target) {
+            return PasteDeliveryResult(status: .pasted, target: target)
+        }
+
         if writeDirectlyToFocusedInput(text, target: target) {
             return PasteDeliveryResult(status: .pasted, target: target)
         }
@@ -106,9 +121,51 @@ public final class PasteService: @unchecked Sendable {
         )
     }
 
-    private func storeLastExternalTarget(_ target: FocusTarget) {
+    private func currentApplicationTarget(from application: NSRunningApplication?) -> FocusTarget? {
+        guard let app = application, !app.isTerminated else { return nil }
+        guard app.processIdentifier == ProcessInfo.processInfo.processIdentifier
+                || app.bundleIdentifier == Bundle.main.bundleIdentifier else {
+            return nil
+        }
+        return FocusTarget(
+            processIdentifier: app.processIdentifier,
+            applicationName: app.localizedName,
+            bundleIdentifier: app.bundleIdentifier
+        )
+    }
+
+    private func focusedApplicationTarget() -> CapturedFocusedInput? {
+        let systemWideElement = AXUIElementCreateSystemWide()
+        var rawElement: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            systemWideElement,
+            kAXFocusedUIElementAttribute as CFString,
+            &rawElement
+        ) == .success,
+              let rawElement else {
+            return nil
+        }
+
+        let element = rawElement as! AXUIElement
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success,
+              let application = NSRunningApplication(processIdentifier: pid),
+              !application.isTerminated else {
+            return nil
+        }
+
+        let target = FocusTarget(
+            processIdentifier: application.processIdentifier,
+            applicationName: application.localizedName,
+            bundleIdentifier: application.bundleIdentifier
+        )
+        return CapturedFocusedInput(target: target, element: element)
+    }
+
+    private func storeLastExternalTarget(_ target: FocusTarget, focusedInput: CapturedFocusedInput? = nil) {
         targetLock.lock()
         lastExternalTarget = target
+        lastFocusedInput = focusedInput
         targetLock.unlock()
     }
 
@@ -158,7 +215,15 @@ public final class PasteService: @unchecked Sendable {
 
     private func writeDirectlyToFocusedInput(_ text: String, target: FocusTarget) -> Bool {
         guard let element = focusedElement(matching: target) else { return false }
+        return writeDirectly(text, to: element)
+    }
 
+    private func writeDirectlyToCapturedInput(_ text: String, target: FocusTarget) -> Bool {
+        guard let element = capturedElement(matching: target) else { return false }
+        return writeDirectly(text, to: element)
+    }
+
+    private func writeDirectly(_ text: String, to element: AXUIElement) -> Bool {
         if AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFTypeRef) == .success {
             return true
         }
@@ -192,6 +257,19 @@ public final class PasteService: @unchecked Sendable {
         return true
     }
 
+    private func capturedElement(matching target: FocusTarget) -> AXUIElement? {
+        targetLock.lock()
+        let captured = lastFocusedInput
+        targetLock.unlock()
+
+        guard let captured,
+              captured.target == target,
+              elementMatchesTarget(captured.element, target: target) else {
+            return nil
+        }
+        return captured.element
+    }
+
     private func focusedElement(matching target: FocusTarget) -> AXUIElement? {
         let systemWideElement = AXUIElementCreateSystemWide()
         var rawElement: CFTypeRef?
@@ -205,15 +283,18 @@ public final class PasteService: @unchecked Sendable {
         }
 
         let element = rawElement as! AXUIElement
+        return elementMatchesTarget(element, target: target) ? element : nil
+    }
+
+    private func elementMatchesTarget(_ element: AXUIElement, target: FocusTarget) -> Bool {
         var pid: pid_t = 0
-        guard AXUIElementGetPid(element, &pid) == .success else { return nil }
+        guard AXUIElementGetPid(element, &pid) == .success else { return false }
         if pid == target.processIdentifier {
-            return element
+            return true
         }
 
-        guard let application = NSRunningApplication(processIdentifier: pid) else { return nil }
-        guard isFrontmost(application, matching: target) else { return nil }
-        return element
+        guard let application = NSRunningApplication(processIdentifier: pid) else { return false }
+        return isFrontmost(application, matching: target)
     }
 
     private func selectedTextRange(in element: AXUIElement) -> CFRange? {
@@ -269,4 +350,9 @@ public final class PasteService: @unchecked Sendable {
 
         return false
     }
+}
+
+private struct CapturedFocusedInput {
+    var target: FocusTarget
+    var element: AXUIElement
 }

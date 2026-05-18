@@ -42,6 +42,14 @@ struct PureVoiceApp: App {
                 .task { await state.loadIfNeeded() }
         }
         .defaultSize(width: 620, height: 640)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings...") {
+                    state.openSettings()
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+        }
 
         Window("Pure Voice HUD", id: "hud") {
             HUDView()
@@ -49,20 +57,5 @@ struct PureVoiceApp: App {
                 .task { await state.loadIfNeeded() }
         }
         .defaultSize(width: 360, height: 220)
-
-        Settings {
-            SettingsView()
-                .environmentObject(state)
-                .frame(
-                    minWidth: 560,
-                    idealWidth: 820,
-                    maxWidth: .infinity,
-                    minHeight: 520,
-                    idealHeight: 760,
-                    maxHeight: .infinity
-                )
-                .background(SettingsWindowConfigurator())
-                .task { await state.loadIfNeeded() }
-        }
     }
 }

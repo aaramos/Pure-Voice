@@ -124,6 +124,8 @@ final class AppState: ObservableObject {
     private var loaded = false
     private var meteringTimer: Timer?
     private var recordingStatusPanel: RecordingStatusPanel?
+    private var settingsWindow: NSWindow?
+    private var settingsWindowDelegate: SettingsWindowDelegate?
     private var recordingStatusDismissTask: Task<Void, Never>?
     private var personaPromptSaveTasks: [String: Task<Void, Never>] = [:]
     private var personaPreviewTasks: [String: Task<Void, Never>] = [:]
@@ -1317,26 +1319,52 @@ final class AppState: ObservableObject {
     }
 
     func openSettings() {
+        if settingsWindow == nil {
+            createSettingsWindow()
+        }
+
+        guard let settingsWindow else { return }
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        bringSettingsWindowToFront()
+        settingsWindow.makeKeyAndOrderFront(nil)
+        settingsWindow.orderFrontRegardless()
         recordingStatus = .idle
     }
 
-    private func bringSettingsWindowToFront() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-            NSApp.activate(ignoringOtherApps: true)
-            let settingsWindows = NSApp.windows.filter { window in
-                window.title.localizedCaseInsensitiveContains("settings")
-                    || window.identifier?.rawValue.localizedCaseInsensitiveContains("settings") == true
-            }
+    private func createSettingsWindow() {
+        let rootView = SettingsView()
+            .environmentObject(self)
+            .frame(
+                minWidth: 560,
+                idealWidth: 820,
+                maxWidth: .infinity,
+                minHeight: 520,
+                idealHeight: 760,
+                maxHeight: .infinity
+            )
+            .task { await self.loadIfNeeded() }
 
-            for window in settingsWindows {
-                SettingsWindowConfigurator.configure(window: window)
-                window.makeKeyAndOrderFront(nil)
-                window.orderFrontRegardless()
-            }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 820, height: 760),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Pure Voice Settings"
+        window.identifier = NSUserInterfaceItemIdentifier("PureVoiceSettingsWindow")
+        window.contentMinSize = NSSize(width: 560, height: 520)
+        window.minSize = NSSize(width: 560, height: 520)
+        window.collectionBehavior.insert(.fullScreenNone)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: rootView)
+        window.center()
+
+        let delegate = SettingsWindowDelegate { [weak self] in
+            self?.settingsWindow = nil
+            self?.settingsWindowDelegate = nil
         }
+        window.delegate = delegate
+        settingsWindowDelegate = delegate
+        settingsWindow = window
     }
 
     private func openSystemSettingsPane(_ urlString: String) {
@@ -1344,4 +1372,16 @@ final class AppState: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+}
+
+private final class SettingsWindowDelegate: NSObject, NSWindowDelegate {
+    private let onClose: () -> Void
+
+    init(onClose: @escaping () -> Void) {
+        self.onClose = onClose
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose()
+    }
 }

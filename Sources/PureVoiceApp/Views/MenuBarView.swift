@@ -39,11 +39,11 @@ struct MenuBarView: View {
                 .lineLimit(1)
                 .foregroundStyle(.secondary)
 
-            Text("Start: right Command + right Option")
+            Text("Start: \(state.hotkeyDisplayText(for: .pushToRecord))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Text("Stop: right Option")
+            Text("Stop: \(state.hotkeyDisplayText(for: .pushToRecordStop))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -67,8 +67,8 @@ struct MenuBarView: View {
 
             Divider()
 
-            SettingsLink {
-                Text("Settings")
+            Button("Settings") {
+                state.openSettings()
             }
 
             Button("Check For Updates") {

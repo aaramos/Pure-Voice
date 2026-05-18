@@ -40,7 +40,7 @@ private struct HeaderView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Pure Voice")
                     .font(.largeTitle.weight(.semibold))
-                Text("Start with right Command + right Option. Stop with right Option.")
+                Text(state.recordingInstructionText)
                     .foregroundStyle(.secondary)
             }
 

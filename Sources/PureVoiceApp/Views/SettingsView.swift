@@ -76,7 +76,7 @@ struct SettingsView: View {
 
                 TextEditor(text: $state.personaPreviewInput)
                     .font(.body)
-                    .frame(minHeight: 96)
+                    .frame(height: 128)
 
                 HStack {
                     Spacer()
