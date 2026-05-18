@@ -790,8 +790,12 @@ final class AppState: ObservableObject {
 
     private func updateWaveformLevel() {
         let db = audioRecorder.currentLevel()
-        let normalized = max(0, min(1, (CGFloat(db) + 60) / 60))
-        let height = 4 + normalized * 48
+        let linearLevel = max(0, min(1, (CGFloat(db) + 60) / 60))
+        let shapedLevel = pow(linearLevel, 0.72)
+        let targetHeight = 4 + shapedLevel * 48
+        let previousHeight = waveformLevels.last ?? 4
+        let smoothing: CGFloat = targetHeight > previousHeight ? 0.72 : 0.26
+        let height = previousHeight + (targetHeight - previousHeight) * smoothing
 
         if waveformLevels.isEmpty {
             waveformLevels = Array(repeating: 4, count: 37) + [height]
