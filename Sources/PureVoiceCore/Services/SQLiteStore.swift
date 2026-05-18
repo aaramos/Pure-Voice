@@ -156,22 +156,19 @@ public final class SQLiteStore: @unchecked Sendable {
         }
     }
 
-    public func migratePersonaPromptsForNoReasoningInstruction() throws {
+    public func migratePersonaPromptsToEditableInstructions() throws {
         for persona in try loadPersonas()
-            where !persona.systemPrompt.contains("Return ONLY the final polished text.")
+            where persona.systemPrompt.contains(PersonaStore.sharedGuardrail)
         {
             var updated = persona
-            updated.systemPrompt = [
-                persona.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines),
-                PersonaDefaults.noReasoningInstruction
-            ].joined(separator: "\n\n")
+            updated.systemPrompt = PersonaStore.stripSharedGuardrail(from: persona.systemPrompt)
             updated.updatedAt = Date()
             try upsertPersona(updated)
         }
     }
 
     public func syncBuiltinPersonaPrompts() throws {
-        try migratePersonaPromptsForNoReasoningInstruction()
+        try migratePersonaPromptsToEditableInstructions()
 
         let defaultsByName = Dictionary(uniqueKeysWithValues: PersonaDefaults.defaultPersonas.map { ($0.name, $0) })
         for persona in try loadPersonas() {
@@ -283,6 +280,15 @@ public final class SQLiteStore: @unchecked Sendable {
                 return nil
             }
             throw SQLiteStoreError.stepFailed(lastErrorMessage)
+        }
+    }
+
+    public func deleteConfig(key: String) throws {
+        try locked {
+            let statement = try prepare("DELETE FROM app_config WHERE key = ?;")
+            defer { sqlite3_finalize(statement) }
+            bindText(statement, 1, key)
+            try stepDone(statement)
         }
     }
 

@@ -7,12 +7,16 @@ import XCTest
 final class PureVoiceCoreTests: XCTestCase {
     func testPersonaDefaultsIncludeRequiredPersonas() {
         let names = PersonaDefaults.defaultPersonas.map(\.name)
-        XCTAssertEqual(names, ["Polish", "Rewrite", "Proofread", "Concise", "Clarity", "Ultra Concise"])
+        XCTAssertEqual(names, ["Polish", "Clarity", "Concise", "Proofread", "Rewrite", "Ultra Concise"])
         XCTAssertEqual(PersonaDefaults.defaultPersonas.filter(\.isDefault).map(\.name), ["Polish"])
         XCTAssertEqual(PersonaDefaults.defaultPersonas.first(where: \.isDefault)?.id, PersonaDefaults.defaultPersonaID)
         XCTAssertTrue(PersonaDefaults.defaultPersonas.allSatisfy {
             $0.systemPrompt.contains("Do not answer")
         })
+        XCTAssertFalse(PersonaDefaults.defaultPersonas.contains {
+            $0.systemPrompt.contains(PersonaStore.sharedGuardrail)
+        })
+        XCTAssertTrue(PersonaStore.promptWithGuardrail("Edit this.").contains(PersonaStore.sharedGuardrail))
         XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Polish" }?.systemPrompt.contains("Proofread and lightly shorten") == true)
         XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Polish" }?.systemPrompt.contains("do not compress it aggressively") == true)
         XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Rewrite" }?.systemPrompt.contains("clean, natural voice") == true)
@@ -30,9 +34,7 @@ final class PureVoiceCoreTests: XCTestCase {
         XCTAssertEqual(personas.count, 6)
         XCTAssertEqual(personas.filter(\.isDefault).map(\.name), ["Polish"])
         XCTAssertEqual(Set(personas.map(\.name)), Set(["Polish", "Rewrite", "Proofread", "Concise", "Clarity", "Ultra Concise"]))
-        XCTAssertTrue(personas.allSatisfy {
-            $0.systemPrompt.contains("Return ONLY the final polished text.")
-        })
+        XCTAssertFalse(personas.contains { $0.systemPrompt.contains(PersonaStore.sharedGuardrail) })
         XCTAssertTrue(personas.allSatisfy {
             $0.systemPrompt.contains("Do not answer")
         })
@@ -98,9 +100,7 @@ final class PureVoiceCoreTests: XCTestCase {
         XCTAssertTrue(personas.contains { $0.name == "Ultra Concise" })
         XCTAssertFalse(personas.contains { $0.name == "Default" })
         XCTAssertEqual(personas.filter(\.isDefault).map(\.name), ["Polish"])
-        XCTAssertTrue(personas.allSatisfy {
-            $0.systemPrompt.contains("Return ONLY the final polished text.")
-        })
+        XCTAssertFalse(personas.contains { $0.systemPrompt.contains(PersonaStore.sharedGuardrail) })
         XCTAssertTrue(personas.allSatisfy {
             $0.systemPrompt.contains("Do not answer")
         })
@@ -162,6 +162,28 @@ final class PureVoiceCoreTests: XCTestCase {
         XCTAssertTrue(personas.allSatisfy {
             $0.systemPrompt.contains("Do not answer")
         })
+    }
+
+    func testPersonaStoreOverridesAndResetsEditablePrompt() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pure-voice-persona-store-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let sqlite = try SQLiteStore(databaseURL: url)
+        let store = PersonaStore(store: sqlite)
+        let persona = try XCTUnwrap(try sqlite.loadPersonas().first { $0.id == "polish" })
+
+        XCTAssertEqual(try store.editablePrompt(for: persona), PersonaStore.defaultPrompt(for: "polish"))
+        XCTAssertFalse(try store.isCustomized(persona))
+
+        try store.saveOverride(persona: persona, prompt: "Custom polish prompt.")
+        XCTAssertEqual(try store.editablePrompt(for: persona), "Custom polish prompt.")
+        XCTAssertTrue(try store.isCustomized(persona))
+        XCTAssertTrue(try store.currentPrompt(for: persona).contains(PersonaStore.sharedGuardrail))
+
+        try store.reset(persona: persona)
+        XCTAssertEqual(try store.editablePrompt(for: persona), PersonaStore.defaultPrompt(for: "polish"))
+        XCTAssertFalse(try store.isCustomized(persona))
     }
 
     func testSQLiteMigratesOldDefaultActivePersonaToPolish() throws {

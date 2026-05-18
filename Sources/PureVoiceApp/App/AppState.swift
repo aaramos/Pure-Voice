@@ -57,6 +57,8 @@ struct AttentionGuidance: Equatable {
 final class AppState: ObservableObject {
     @Published var stage: AppStage = .idle
     @Published var personas: [Persona] = []
+    @Published var personaPromptDrafts: [String: String] = [:]
+    @Published var personaPromptSaveStatus: [String: String] = [:]
     @Published var selectedPersonaID = "clarity" {
         didSet { saveStringConfig("active_persona_id", selectedPersonaID) }
     }
@@ -99,6 +101,7 @@ final class AppState: ObservableObject {
     private let pasteService = PasteService()
     private let hotKeyService = HotkeyService()
     private var store: SQLiteStore?
+    private var personaStore: PersonaStore?
     private var sttClient: STTHelperClient?
     private var activeAudioURL: URL?
     private var activeRecordingSTTEngine: STTEngine?
@@ -107,6 +110,7 @@ final class AppState: ObservableObject {
     private var meteringTimer: Timer?
     private var recordingStatusPanel: RecordingStatusPanel?
     private var recordingStatusDismissTask: Task<Void, Never>?
+    private var personaPromptSaveTasks: [String: Task<Void, Never>] = [:]
     private var pushToTalkKeyDown = false
 
     init() {
@@ -298,7 +302,10 @@ final class AppState: ObservableObject {
         do {
             let store = try SQLiteStore(databaseURL: SQLiteStore.defaultDatabaseURL())
             self.store = store
+            let personaStore = PersonaStore(store: store)
+            self.personaStore = personaStore
             personas = try store.loadPersonas()
+            loadPersonaPromptDrafts(using: personaStore)
             let defaultPersonaID = personas.first(where: \.isDefault)?.id ?? PersonaDefaults.defaultPersonaID
             let storedPersonaID = readStringConfig("active_persona_id") ?? defaultPersonaID
             selectedPersonaID = personas.contains { $0.id == storedPersonaID }
@@ -482,6 +489,47 @@ final class AppState: ObservableObject {
         lastPasteStatus = .copied
         lastPasteFallbackReason = PasteFallbackReason.none
         stage = .copied
+    }
+
+    func editablePrompt(for persona: Persona) -> String {
+        personaPromptDrafts[persona.id]
+            ?? PersonaStore.defaultPrompt(for: persona.id)
+            ?? PersonaStore.stripSharedGuardrail(from: persona.systemPrompt)
+    }
+
+    func personaPromptStatus(for persona: Persona) -> String? {
+        personaPromptSaveStatus[persona.id]
+    }
+
+    func isPersonaPromptCustomized(_ persona: Persona) -> Bool {
+        editablePrompt(for: persona) != (PersonaStore.defaultPrompt(for: persona.id) ?? "")
+    }
+
+    func updatePersonaPrompt(_ prompt: String, for persona: Persona) {
+        let cleaned = PersonaStore.stripSharedGuardrail(from: prompt)
+        personaPromptDrafts[persona.id] = cleaned
+        personaPromptSaveStatus[persona.id] = "Saving..."
+        personaPromptSaveTasks[persona.id]?.cancel()
+        personaPromptSaveTasks[persona.id] = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            await MainActor.run {
+                self?.savePersonaPromptDraft(for: persona)
+            }
+        }
+    }
+
+    func restoreDefaultPrompt(for persona: Persona) {
+        guard confirmRestoreDefaultPrompt(for: persona) else { return }
+        personaPromptSaveTasks[persona.id]?.cancel()
+        personaPromptSaveTasks[persona.id] = nil
+
+        do {
+            try personaStore?.reset(persona: persona)
+            personaPromptDrafts[persona.id] = PersonaStore.defaultPrompt(for: persona.id) ?? persona.systemPrompt
+            personaPromptSaveStatus[persona.id] = "Restored default"
+        } catch {
+            personaPromptSaveStatus[persona.id] = "Restore failed: \(error.localizedDescription)"
+        }
     }
 
     func refreshSTTHealth() async {
@@ -860,9 +908,11 @@ final class AppState: ObservableObject {
 
         switch availability {
         case .available:
+            let systemPrompt = (try? personaStore?.currentPrompt(for: persona))
+                ?? PersonaStore.promptWithGuardrail(persona.systemPrompt)
             let polished = try await appleClient.polish(
                 text: transcript,
-                systemPrompt: persona.systemPrompt
+                systemPrompt: systemPrompt
             )
             return PolishingResult(
                 text: polished,
@@ -876,9 +926,11 @@ final class AppState: ObservableObject {
             try await Task.sleep(for: .seconds(10))
 
             if await refreshAppleFoundationAvailability() == .available {
+                let systemPrompt = (try? personaStore?.currentPrompt(for: persona))
+                    ?? PersonaStore.promptWithGuardrail(persona.systemPrompt)
                 let polished = try await appleClient.polish(
                     text: transcript,
-                    systemPrompt: persona.systemPrompt
+                    systemPrompt: systemPrompt
                 )
                 return PolishingResult(
                     text: polished,
@@ -951,6 +1003,25 @@ final class AppState: ObservableObject {
         return value
     }
 
+    private func loadPersonaPromptDrafts(using personaStore: PersonaStore) {
+        var drafts: [String: String] = [:]
+        for persona in personas {
+            drafts[persona.id] = (try? personaStore.editablePrompt(for: persona))
+                ?? PersonaStore.defaultPrompt(for: persona.id)
+                ?? PersonaStore.stripSharedGuardrail(from: persona.systemPrompt)
+        }
+        personaPromptDrafts = drafts
+    }
+
+    private func savePersonaPromptDraft(for persona: Persona) {
+        do {
+            try personaStore?.saveOverride(persona: persona, prompt: editablePrompt(for: persona))
+            personaPromptSaveStatus[persona.id] = "Saved"
+        } catch {
+            personaPromptSaveStatus[persona.id] = "Save failed: \(error.localizedDescription)"
+        }
+    }
+
     private func saveStringConfig(_ key: String, _ value: String) {
         guard let data = try? JSONEncoder().encode(value), let raw = String(data: data, encoding: .utf8) else { return }
         try? store?.saveConfig(key: key, valueJSON: raw)
@@ -996,6 +1067,18 @@ final class AppState: ObservableObject {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Install Parakeet")
         alert.addButton(withTitle: "Not Now")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func confirmRestoreDefaultPrompt(for persona: Persona) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.messageText = "Restore \(persona.name) default?"
+        alert.informativeText = "This replaces the customized \(persona.name) prompt with the built-in default."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Restore Default")
+        alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
     }
 

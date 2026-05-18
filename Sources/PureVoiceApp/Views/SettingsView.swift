@@ -11,6 +11,9 @@ struct SettingsView: View {
 
             recordingTab
                 .tabItem { Text("Recording") }
+
+            advancedTab
+                .tabItem { Text("Advanced") }
         }
         .padding(20)
     }
@@ -22,6 +25,33 @@ struct SettingsView: View {
             sttSection
             updateSection
             privacySection
+        }
+    }
+
+    private var advancedTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Persona Prompts")
+                        .font(.headline)
+                    Text("Edit the instruction sent to the polishing model for each persona.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                ForEach(state.personas) { persona in
+                    personaPromptEditor(for: persona)
+                }
+
+                GroupBox("Shared Guardrail") {
+                    Text(PersonaStore.sharedGuardrail)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -259,6 +289,45 @@ struct SettingsView: View {
                 Label(warning, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func personaPromptEditor(for persona: Persona) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(persona.name)
+                        .font(.callout.weight(.semibold))
+
+                    if state.isPersonaPromptCustomized(persona) {
+                        Text("Customized")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(.secondary.opacity(0.12), in: Capsule())
+
+                        Button("Restore Default") {
+                            state.restoreDefaultPrompt(for: persona)
+                        }
+                    }
+
+                    Spacer()
+
+                    if let status = state.personaPromptStatus(for: persona) {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                TextEditor(text: Binding(
+                    get: { state.editablePrompt(for: persona) },
+                    set: { state.updatePersonaPrompt($0, for: persona) }
+                ))
+                .font(.system(.callout, design: .monospaced))
+                .frame(minHeight: 92)
             }
         }
     }
