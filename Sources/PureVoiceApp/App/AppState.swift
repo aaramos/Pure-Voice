@@ -69,6 +69,7 @@ final class AppState: ObservableObject {
     @Published var llmStatus = "Not checked"
     @Published var appleFoundationAvailability = AppleFoundationModelClient.availability
     @Published var whisperHealth = STTHealth(engine: "whisper", available: false, message: "Not checked")
+    @Published var sttInstallInProgress = false
     @Published var transcriptPreview = ""
     @Published var polishedPreview = ""
     @Published var errorMessage: String?
@@ -167,7 +168,7 @@ final class AppState: ObservableObject {
         case .copied:
             switch lastPasteFallbackReason {
             case .accessibilityPermissionMissing:
-                return "Pure Voice copied this because macOS has not granted Accessibility control to Pure Voice. Enable it in System Settings if you want automatic paste."
+                return "Pure Voice copied this because macOS did not confirm Accessibility control for this build. If Pure Voice is already enabled in System Settings, toggle it off and back on."
             case .targetUnavailable:
                 return "Pure Voice copied this because it could not identify the target field. Click the field first, then start recording with the hotkey."
             case .targetActivationFailed:
@@ -211,7 +212,7 @@ final class AppState: ObservableObject {
             return AttentionGuidance(
                 title: "Paste Permission Needs Attention",
                 message: issue,
-                nextStep: "Enable Pure Voice in System Settings > Privacy & Security > Accessibility so it can paste into the app where you started recording. If you only want clipboard fallback, the transcript is copied when paste is unavailable.",
+                nextStep: "Enable Pure Voice in System Settings > Privacy & Security > Accessibility. If it is already enabled, toggle Pure Voice off and back on so macOS refreshes trust for the current build.",
                 actionTitle: "Open Accessibility Privacy",
                 action: .openAccessibilityPrivacy
             )
@@ -310,7 +311,8 @@ final class AppState: ObservableObject {
         )
 
         _ = pasteService.hasAccessibilityPermission(prompt: false)
-        await refreshHealth()
+        await refreshAppleFoundationAvailability()
+        await ensureSTTDependencies()
         await checkForUpdates(promptIfAvailable: true)
     }
 
@@ -451,7 +453,40 @@ final class AppState: ObservableObject {
 
     func refreshSTTHealth() async {
         guard let sttClient else { return }
+        guard !sttInstallInProgress else { return }
         whisperHealth = await sttClient.health(engine: .whisper)
+    }
+
+    func ensureSTTDependencies() async {
+        guard let sttClient else { return }
+        guard !sttInstallInProgress else { return }
+
+        let health = await sttClient.health(engine: .whisper)
+        whisperHealth = health
+
+        guard !health.available else { return }
+        await installSTTDependencies()
+    }
+
+    func installSTTDependencies() async {
+        guard let sttClient else { return }
+        guard !sttInstallInProgress else { return }
+
+        sttInstallInProgress = true
+        whisperHealth = STTHealth(engine: "whisper", available: false, message: "Installing Whisper...")
+        defer { sttInstallInProgress = false }
+
+        let health = await sttClient.install(engine: .whisper)
+        whisperHealth = health
+
+        if health.available {
+            if stage == .error, errorMessage?.contains("Whisper setup failed") == true {
+                errorMessage = nil
+                stage = .idle
+            }
+        } else {
+            failMessage("Whisper setup failed: \(health.message)")
+        }
     }
 
     func toggleRecording() async {

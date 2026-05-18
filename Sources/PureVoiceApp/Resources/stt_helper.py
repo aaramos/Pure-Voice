@@ -12,7 +12,8 @@ from pathlib import Path
 
 APP_SUPPORT = Path.home() / "Library" / "Application Support" / "Pure Voice"
 STT_DIR = APP_SUPPORT / "STT"
-VENV_PYTHON = STT_DIR / ".venv" / "bin" / "python"
+VENV_DIR = STT_DIR / ".venv"
+VENV_PYTHON = VENV_DIR / "bin" / "python"
 WHISPER_CPP_MODEL = APP_SUPPORT / "Models" / "whisper.cpp" / "ggml-base.en.bin"
 MPLCONFIG_DIR = STT_DIR / "matplotlib"
 
@@ -53,6 +54,49 @@ def import_faster_whisper():
         return WhisperModel
     except Exception:
         return None
+
+
+def run_checked(command, description):
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return result
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"{description} failed because {command[0]} was not found") from exc
+    except subprocess.CalledProcessError as exc:
+        output = "\n".join(part for part in [exc.stdout, exc.stderr] if part).strip()
+        if len(output) > 4000:
+            output = output[-4000:]
+        raise RuntimeError(f"{description} failed: {output or exc}") from exc
+
+
+def verify_venv_whisper_health():
+    if not VENV_PYTHON.exists():
+        return {
+            "engine": "whisper",
+            "available": False,
+            "message": f"Python environment missing at {VENV_PYTHON}",
+            "model": None,
+        }
+
+    result = run_checked(
+        [str(VENV_PYTHON), __file__, "health", "--engine", "whisper"],
+        "Whisper health verification",
+    )
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Whisper health verification returned invalid output: {result.stdout}") from exc
+
+
+def prepare_venv_dir():
+    if VENV_DIR.exists() and not VENV_PYTHON.exists():
+        shutil.rmtree(VENV_DIR)
 
 
 def whisper_health():
@@ -98,6 +142,36 @@ def whisper_health():
         "message": "Run script/setup_stt.sh",
         "model": None,
     }
+
+
+def install_whisper():
+    current_health = whisper_health()
+    if current_health.get("available"):
+        return current_health
+
+    STT_DIR.mkdir(parents=True, exist_ok=True)
+    MPLCONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    prepare_venv_dir()
+
+    uv = find_executable("uv")
+    if uv:
+        run_checked([uv, "venv", str(VENV_DIR), "--python", "python3.12"], "Creating Whisper Python environment")
+        run_checked(
+            [uv, "pip", "install", "--python", str(VENV_PYTHON), "faster-whisper"],
+            "Installing faster-whisper",
+        )
+    else:
+        python_bin = find_executable("python3.12", "python3.11", "python3")
+        if not python_bin:
+            raise RuntimeError("Python 3 was not found. Install Python 3, then reopen Pure Voice.")
+        run_checked([python_bin, "-m", "venv", str(VENV_DIR)], "Creating Whisper Python environment")
+        run_checked([str(VENV_PYTHON), "-m", "pip", "install", "--upgrade", "pip"], "Updating pip")
+        run_checked([str(VENV_PYTHON), "-m", "pip", "install", "faster-whisper"], "Installing faster-whisper")
+
+    health = verify_venv_whisper_health()
+    if health.get("available"):
+        health["message"] = "faster-whisper installed"
+    return health
 
 
 def transcribe_with_faster_whisper(audio_path, model_name):
@@ -164,6 +238,26 @@ def handle_health(args):
     emit({"engine": args.engine, "available": False, "message": "Unknown STT engine", "model": None}, 2)
 
 
+def handle_install(args):
+    try:
+        if args.engine == "whisper":
+            health = install_whisper()
+        else:
+            raise RuntimeError(f"Unknown STT engine: {args.engine}")
+
+        emit(health, 0 if health.get("available") else 1)
+    except Exception as exc:
+        emit(
+            {
+                "engine": args.engine,
+                "available": False,
+                "message": str(exc),
+                "model": None,
+            },
+            1,
+        )
+
+
 def handle_transcribe(args):
     started = time.monotonic()
     try:
@@ -205,6 +299,10 @@ def main():
     health = subparsers.add_parser("health")
     health.add_argument("--engine", required=True, choices=["whisper"])
     health.set_defaults(func=handle_health)
+
+    install = subparsers.add_parser("install")
+    install.add_argument("--engine", required=True, choices=["whisper"])
+    install.set_defaults(func=handle_install)
 
     transcribe = subparsers.add_parser("transcribe")
     transcribe.add_argument("--engine", required=True, choices=["whisper"])

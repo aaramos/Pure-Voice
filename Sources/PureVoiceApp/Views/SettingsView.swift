@@ -50,8 +50,27 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 healthRow("Whisper", health: state.whisperHealth)
 
-                Button("Refresh STT Health") {
-                    Task { await state.refreshSTTHealth() }
+                HStack {
+                    if state.sttInstallInProgress {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Installing Whisper...")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Refresh") {
+                        Task { await state.refreshSTTHealth() }
+                    }
+                    .disabled(state.sttInstallInProgress)
+
+                    if !state.whisperHealth.available {
+                        Button("Install Whisper") {
+                            Task { await state.installSTTDependencies() }
+                        }
+                        .disabled(state.sttInstallInProgress)
+                    }
                 }
             }
         }

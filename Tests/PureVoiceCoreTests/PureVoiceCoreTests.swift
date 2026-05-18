@@ -286,6 +286,36 @@ final class PureVoiceCoreTests: XCTestCase {
         XCTAssertEqual(result.latencyMs, 123)
     }
 
+    func testSTTHelperInstallDecodesHealthShape() async throws {
+        let helperURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pure-voice-helper-\(UUID().uuidString).py")
+        defer { try? FileManager.default.removeItem(at: helperURL) }
+
+        let script = """
+        import json
+        import sys
+
+        if sys.argv[1:] == ["install", "--engine", "whisper"]:
+            print(json.dumps({
+                "engine": "whisper",
+                "available": True,
+                "message": "faster-whisper installed",
+                "model": "base.en"
+            }))
+        else:
+            raise SystemExit(2)
+        """
+        try script.write(to: helperURL, atomically: true, encoding: .utf8)
+
+        let client = STTHelperClient(helperURL: helperURL)
+        let health = await client.install(engine: .whisper)
+
+        XCTAssertTrue(health.available)
+        XCTAssertEqual(health.engine, "whisper")
+        XCTAssertEqual(health.message, "faster-whisper installed")
+        XCTAssertEqual(health.model, "base.en")
+    }
+
     func testGitHubUpdateInfoPrefersDMGForNewerRelease() throws {
         let release = GitHubRelease(
             tagName: "v1.2.0",

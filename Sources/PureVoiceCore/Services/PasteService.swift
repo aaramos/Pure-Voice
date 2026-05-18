@@ -53,7 +53,7 @@ public final class PasteService: @unchecked Sendable {
             return PasteDeliveryResult(status: .copied, fallbackReason: .targetUnavailable)
         }
 
-        guard hasAccessibilityPermission(prompt: true) else {
+        guard hasAccessibilityPermission(prompt: false) else {
             return PasteDeliveryResult(status: .copied, fallbackReason: .accessibilityPermissionMissing, target: target)
         }
 

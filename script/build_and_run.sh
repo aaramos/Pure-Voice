@@ -11,6 +11,7 @@ MARKETING_VERSION="1.0.0"
 BUILD_VERSION="100"
 CONFIGURATION="${CONFIGURATION:-debug}"
 CODE_SIGN_IDENTITY="${PUREVOICE_CODESIGN_IDENTITY:-Pure Voice Local Development}"
+CODE_SIGN_KEYCHAIN="${PUREVOICE_CODESIGN_KEYCHAIN:-$HOME/Library/Application Support/Pure Voice/Signing/PureVoice.keychain-db}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -75,7 +76,9 @@ cat >"$INFO_PLIST" <<PLIST
 </plist>
 PLIST
 
-if security find-identity -p codesigning -v 2>/dev/null | grep -Fq "\"$CODE_SIGN_IDENTITY\""; then
+if [[ -f "$CODE_SIGN_KEYCHAIN" ]] && security find-identity -p codesigning -v "$CODE_SIGN_KEYCHAIN" 2>/dev/null | grep -Fq "\"$CODE_SIGN_IDENTITY\""; then
+  codesign --force --sign "$CODE_SIGN_IDENTITY" --keychain "$CODE_SIGN_KEYCHAIN" "$APP_BUNDLE" >/dev/null
+elif security find-identity -p codesigning -v 2>/dev/null | grep -Fq "\"$CODE_SIGN_IDENTITY\""; then
   codesign --force --sign "$CODE_SIGN_IDENTITY" "$APP_BUNDLE" >/dev/null
 else
   echo "warning: signing with ad-hoc identity; run ./script/setup_codesign.sh to stabilize macOS permissions" >&2

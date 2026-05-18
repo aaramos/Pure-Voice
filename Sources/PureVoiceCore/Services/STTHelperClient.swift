@@ -41,6 +41,22 @@ public final class STTHelperClient: @unchecked Sendable {
         }
     }
 
+    public func install(engine: STTEngine) async -> STTHealth {
+        do {
+            let data = try await Task.detached {
+                try self.runHelper(arguments: ["install", "--engine", engine.rawValue])
+            }.value
+            return try decoder.decode(STTHealth.self, from: data)
+        } catch {
+            return STTHealth(
+                engine: engine.rawValue,
+                available: false,
+                message: error.localizedDescription,
+                model: nil
+            )
+        }
+    }
+
     public func transcribe(audioURL: URL, engine: STTEngine, model: String?) async throws -> STTResult {
         var arguments = [
             "transcribe",
