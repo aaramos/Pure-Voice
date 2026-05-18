@@ -61,6 +61,7 @@ struct PureVoiceApp: App {
                     idealHeight: 760,
                     maxHeight: .infinity
                 )
+                .background(SettingsWindowConfigurator())
                 .task { await state.loadIfNeeded() }
         }
     }
