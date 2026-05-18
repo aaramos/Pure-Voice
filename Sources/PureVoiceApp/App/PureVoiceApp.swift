@@ -53,7 +53,14 @@ struct PureVoiceApp: App {
         Settings {
             SettingsView()
                 .environmentObject(state)
-                .frame(width: 560, height: 520)
+                .frame(
+                    minWidth: 560,
+                    idealWidth: 820,
+                    maxWidth: .infinity,
+                    minHeight: 520,
+                    idealHeight: 760,
+                    maxHeight: .infinity
+                )
                 .task { await state.loadIfNeeded() }
         }
     }
