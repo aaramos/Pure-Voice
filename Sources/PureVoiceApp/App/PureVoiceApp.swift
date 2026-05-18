@@ -11,8 +11,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: NSWindow.willCloseNotification,
             object: nil,
             queue: .main
-        ) { _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        ) { notification in
+            guard let window = notification.object as? NSWindow,
+                  !(window is NSPanel),
+                  !window.className.contains("NSStatus") else {
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 Self.demoteIfNoUserFacingWindows()
             }
         }
@@ -31,15 +36,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private static func demoteIfNoUserFacingWindows() {
         let hasVisibleUserFacingWindow = NSApp.windows.contains { window in
-            window.isVisible
-                && !(window is NSPanel)
-                && window.canBecomeMain
-                && !window.className.contains("NSStatus")
+            window.isVisible && isUserFacingWindow(window)
         }
 
         if !hasVisibleUserFacingWindow {
             NSApp.setActivationPolicy(.accessory)
         }
+    }
+
+    private static func isUserFacingWindow(_ window: NSWindow) -> Bool {
+        !(window is NSPanel)
+            && window.canBecomeMain
+            && !window.className.contains("NSStatus")
     }
 }
 
