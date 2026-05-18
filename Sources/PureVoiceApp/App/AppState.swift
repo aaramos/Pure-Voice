@@ -515,6 +515,7 @@ final class AppState: ObservableObject {
 
     func editablePrompt(for persona: Persona) -> String {
         personaPromptDrafts[persona.id]
+            ?? (try? personaStore?.editablePrompt(for: persona))
             ?? PersonaStore.defaultPrompt(for: persona.id)
             ?? PersonaStore.stripSharedGuardrail(from: persona.systemPrompt)
     }
