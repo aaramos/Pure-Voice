@@ -3,19 +3,33 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var state: AppState
+    @State private var selectedTab: SettingsTab = .general
+    @FocusState private var previewInputFocused: Bool
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             generalTab
                 .tabItem { Text("General") }
+                .tag(SettingsTab.general)
 
             recordingTab
                 .tabItem { Text("Recording") }
+                .tag(SettingsTab.recording)
 
             advancedTab
                 .tabItem { Text("Advanced") }
+                .tag(SettingsTab.advanced)
+
+            previewTab
+                .tabItem { Text("Preview") }
+                .tag(SettingsTab.preview)
         }
         .padding(20)
+        .onChange(of: selectedTab) { _, newValue in
+            if newValue == .preview {
+                state.refreshStalePersonaPreviewIfNeeded()
+            }
+        }
     }
 
     private var generalTab: some View {
@@ -50,6 +64,45 @@ struct SettingsView: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var previewTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Test your personas against sample text.")
+                    .font(.headline)
+
+                TextEditor(text: $state.personaPreviewInput)
+                    .font(.body)
+                    .frame(minHeight: 96)
+                    .focused($previewInputFocused)
+                    .onChange(of: previewInputFocused) { _, isFocused in
+                        if !isFocused {
+                            state.submitPersonaPreviewFromBlur()
+                        }
+                    }
+
+                HStack {
+                    Spacer()
+                    Button("Clear") {
+                        state.clearPersonaPreview()
+                    }
+                    .disabled(state.personaPreviewInput.isEmpty && state.personaPreviewResults.isEmpty)
+                }
+
+                ForEach(state.personas) { persona in
+                    personaPreviewBlock(for: persona)
+                }
+
+                Label(
+                    "Preview uses text input only. Results may differ slightly from live recording polish.",
+                    systemImage: "info.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -331,4 +384,72 @@ struct SettingsView: View {
             }
         }
     }
+
+    private func personaPreviewBlock(for persona: Persona) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(persona.name)
+                        .font(.callout.weight(.semibold))
+
+                    if state.isPersonaPromptCustomized(persona) {
+                        Text("Customized")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(.secondary.opacity(0.12), in: Capsule())
+
+                        Button("Restore Default") {
+                            state.restoreDefaultPromptAndPreview(for: persona)
+                        }
+                    }
+
+                    Spacer()
+
+                    if state.personaPreviewResult(for: persona).isStale {
+                        Text("Out of date")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                personaPreviewContent(for: persona)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func personaPreviewContent(for persona: Persona) -> some View {
+        let result = state.personaPreviewResult(for: persona)
+
+        switch result.phase {
+        case .idle:
+            EmptyView()
+        case .loading:
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading...")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.callout)
+        case .complete:
+            Text(result.text)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .failed:
+            Text(result.text)
+                .foregroundStyle(.red)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private enum SettingsTab: Hashable {
+    case general
+    case recording
+    case advanced
+    case preview
 }

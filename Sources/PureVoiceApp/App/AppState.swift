@@ -37,6 +37,19 @@ private struct PolishingResult {
     var modelLabel: String
 }
 
+enum PersonaPreviewPhase: Equatable {
+    case idle
+    case loading
+    case complete
+    case failed
+}
+
+struct PersonaPreviewResult: Equatable {
+    var phase: PersonaPreviewPhase = .idle
+    var text = ""
+    var isStale = false
+}
+
 struct AttentionGuidance: Equatable {
     enum Action: Equatable {
         case openAppSettings
@@ -59,6 +72,8 @@ final class AppState: ObservableObject {
     @Published var personas: [Persona] = []
     @Published var personaPromptDrafts: [String: String] = [:]
     @Published var personaPromptSaveStatus: [String: String] = [:]
+    @Published var personaPreviewInput = ""
+    @Published var personaPreviewResults: [String: PersonaPreviewResult] = [:]
     @Published var selectedPersonaID = "clarity" {
         didSet { saveStringConfig("active_persona_id", selectedPersonaID) }
     }
@@ -111,6 +126,9 @@ final class AppState: ObservableObject {
     private var recordingStatusPanel: RecordingStatusPanel?
     private var recordingStatusDismissTask: Task<Void, Never>?
     private var personaPromptSaveTasks: [String: Task<Void, Never>] = [:]
+    private var personaPreviewTasks: [String: Task<Void, Never>] = [:]
+    private var lastPersonaPreviewInput = ""
+    private var stalePreviewPersonaIDs = Set<String>()
     private var pushToTalkKeyDown = false
 
     init() {
@@ -501,6 +519,10 @@ final class AppState: ObservableObject {
         personaPromptSaveStatus[persona.id]
     }
 
+    func personaPreviewResult(for persona: Persona) -> PersonaPreviewResult {
+        personaPreviewResults[persona.id] ?? PersonaPreviewResult()
+    }
+
     func isPersonaPromptCustomized(_ persona: Persona) -> Bool {
         editablePrompt(for: persona) != (PersonaStore.defaultPrompt(for: persona.id) ?? "")
     }
@@ -509,6 +531,10 @@ final class AppState: ObservableObject {
         let cleaned = PersonaStore.stripSharedGuardrail(from: prompt)
         personaPromptDrafts[persona.id] = cleaned
         personaPromptSaveStatus[persona.id] = "Saving..."
+        if !lastPersonaPreviewInput.isEmpty {
+            stalePreviewPersonaIDs.insert(persona.id)
+            markPersonaPreviewStale(personaID: persona.id)
+        }
         personaPromptSaveTasks[persona.id]?.cancel()
         personaPromptSaveTasks[persona.id] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
@@ -518,8 +544,9 @@ final class AppState: ObservableObject {
         }
     }
 
-    func restoreDefaultPrompt(for persona: Persona) {
-        guard confirmRestoreDefaultPrompt(for: persona) else { return }
+    @discardableResult
+    func restoreDefaultPrompt(for persona: Persona) -> Bool {
+        guard confirmRestoreDefaultPrompt(for: persona) else { return false }
         personaPromptSaveTasks[persona.id]?.cancel()
         personaPromptSaveTasks[persona.id] = nil
 
@@ -527,9 +554,96 @@ final class AppState: ObservableObject {
             try personaStore?.reset(persona: persona)
             personaPromptDrafts[persona.id] = PersonaStore.defaultPrompt(for: persona.id) ?? persona.systemPrompt
             personaPromptSaveStatus[persona.id] = "Restored default"
+            stalePreviewPersonaIDs.insert(persona.id)
+            markPersonaPreviewStale(personaID: persona.id)
+            return true
         } catch {
             personaPromptSaveStatus[persona.id] = "Restore failed: \(error.localizedDescription)"
+            return false
         }
+    }
+
+    func restoreDefaultPromptAndPreview(for persona: Persona) {
+        guard restoreDefaultPrompt(for: persona) else { return }
+        guard !personaPreviewInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        runPersonaPreview(for: [persona], input: personaPreviewInput)
+    }
+
+    func clearPersonaPreview() {
+        personaPreviewInput = ""
+        personaPreviewResults = [:]
+        lastPersonaPreviewInput = ""
+        stalePreviewPersonaIDs.removeAll()
+        personaPreviewTasks.values.forEach { $0.cancel() }
+        personaPreviewTasks.removeAll()
+    }
+
+    func submitPersonaPreviewFromBlur() {
+        let trimmed = personaPreviewInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            clearPersonaPreview()
+            return
+        }
+
+        if trimmed == lastPersonaPreviewInput {
+            refreshStalePersonaPreviewIfNeeded()
+            return
+        }
+
+        lastPersonaPreviewInput = trimmed
+        stalePreviewPersonaIDs.removeAll()
+        runPersonaPreview(for: personas, input: trimmed)
+    }
+
+    func refreshStalePersonaPreviewIfNeeded() {
+        let trimmed = personaPreviewInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !stalePreviewPersonaIDs.isEmpty else { return }
+        let stalePersonas = personas.filter { stalePreviewPersonaIDs.contains($0.id) }
+        runPersonaPreview(for: stalePersonas, input: trimmed)
+    }
+
+    private func runPersonaPreview(for personasToPreview: [Persona], input: String) {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        for persona in personasToPreview {
+            savePersonaPromptDraft(for: persona)
+            stalePreviewPersonaIDs.remove(persona.id)
+            personaPreviewTasks[persona.id]?.cancel()
+            personaPreviewResults[persona.id] = PersonaPreviewResult(phase: .loading, text: "", isStale: false)
+
+            personaPreviewTasks[persona.id] = Task { [weak self] in
+                guard let self else { return }
+
+                do {
+                    let prompt = self.promptForPreview(persona)
+                    let output = try await self.appleClient.polish(text: trimmed, systemPrompt: prompt)
+                    guard !Task.isCancelled else { return }
+                    self.personaPreviewResults[persona.id] = PersonaPreviewResult(
+                        phase: .complete,
+                        text: output,
+                        isStale: false
+                    )
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    self.personaPreviewResults[persona.id] = PersonaPreviewResult(
+                        phase: .failed,
+                        text: error.localizedDescription,
+                        isStale: false
+                    )
+                }
+            }
+        }
+    }
+
+    private func promptForPreview(_ persona: Persona) -> String {
+        PersonaStore.promptWithGuardrail(editablePrompt(for: persona))
+    }
+
+    private func markPersonaPreviewStale(personaID: String) {
+        var result = personaPreviewResults[personaID] ?? PersonaPreviewResult()
+        result.isStale = result.phase != .idle
+        personaPreviewResults[personaID] = result
     }
 
     func refreshSTTHealth() async {
