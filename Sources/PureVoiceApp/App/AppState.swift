@@ -1332,6 +1332,7 @@ final class AppState: ObservableObject {
             }
 
             for window in settingsWindows {
+                SettingsWindowConfigurator.configure(window: window)
                 window.makeKeyAndOrderFront(nil)
                 window.orderFrontRegardless()
             }
