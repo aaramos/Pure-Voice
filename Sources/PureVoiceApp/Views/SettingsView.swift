@@ -131,9 +131,14 @@ struct SettingsView: View {
 
             GroupBox("Hotkeys") {
                 VStack(alignment: .leading, spacing: 16) {
-                    hotkeyRow(.pushToRecord, subtitle: "Start or stop a recording.")
-                    Divider()
-                    hotkeyRow(.pushToTalk, subtitle: "Reserved for hold-to-talk mode.")
+                    switch state.recordingMode {
+                    case .pushToRecord:
+                        hotkeyRow(.pushToRecord, label: "Start", subtitle: "Starts recording.")
+                        Divider()
+                        hotkeyRow(.pushToRecordStop, label: "Stop", subtitle: "Stops recording and starts transcription.")
+                    case .pushToTalk:
+                        hotkeyRow(.pushToTalk, label: "Hold", subtitle: "Hold this shortcut to record. Releasing it stops recording.")
+                    }
 
                     Text("Hotkeys are system-wide while Pure Voice is running.")
                         .font(.caption)
@@ -303,13 +308,13 @@ struct SettingsView: View {
         .font(.callout)
     }
 
-    private func hotkeyRow(_ action: HotkeyAction, subtitle: String) -> some View {
+    private func hotkeyRow(_ action: HotkeyAction, label: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(action.displayName)
                 .font(.callout.weight(.semibold))
 
             HStack(spacing: 10) {
-                Text(action == .pushToRecord ? "Start / Stop" : "Activate")
+                Text(label)
                     .foregroundStyle(.secondary)
                     .frame(width: 82, alignment: .leading)
 

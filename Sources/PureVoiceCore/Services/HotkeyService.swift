@@ -49,12 +49,18 @@ public extension HotkeyBinding {
         modifierFlags: CGEventFlags.pureVoiceRightCommandOption.rawValue
     )
 
+    static let defaultPushToRecordStop = HotkeyBinding(
+        keyCodes: [HotkeyKeyCode.space],
+        modifierFlags: CGEventFlags.pureVoiceRightCommandOption.rawValue
+    )
+
     static let defaultPushToTalk = HotkeyBinding(
         modifierFlags: CGEventFlags.pureVoiceLeftCommandOption.rawValue
     )
 
     static let defaultBindings: [HotkeyAction: HotkeyBinding] = [
         .pushToRecord: .defaultPushToRecord,
+        .pushToRecordStop: .defaultPushToRecordStop,
         .pushToTalk: .defaultPushToTalk
     ]
 
@@ -78,6 +84,8 @@ public final class HotkeyService: @unchecked Sendable {
     private var pendingCapture: DispatchWorkItem?
     private var captureKeyCodes = Set<UInt16>()
     private var captureMouseButtons = Set<Int64>()
+    private var capturePressedKeyCodes = Set<UInt16>()
+    private var capturePressedMouseButtons = Set<Int64>()
     private var captureModifierFlags: UInt64 = 0
 
     public init() {}
@@ -153,6 +161,8 @@ public final class HotkeyService: @unchecked Sendable {
         pendingCapture = nil
         captureKeyCodes.removeAll()
         captureMouseButtons.removeAll()
+        capturePressedKeyCodes.removeAll()
+        capturePressedMouseButtons.removeAll()
         captureModifierFlags = 0
         captureHandler = handler
     }
@@ -170,6 +180,8 @@ public final class HotkeyService: @unchecked Sendable {
         pressedMouseButtons.removeAll()
         captureKeyCodes.removeAll()
         captureMouseButtons.removeAll()
+        capturePressedKeyCodes.removeAll()
+        capturePressedMouseButtons.removeAll()
         captureModifierFlags = 0
 
         if let runLoopSource {
@@ -223,38 +235,74 @@ public final class HotkeyService: @unchecked Sendable {
         if type == .keyDown {
             if !Self.isModifierKey(keyCode) {
                 captureKeyCodes.insert(keyCode)
+                capturePressedKeyCodes.insert(keyCode)
             }
-            captureModifierFlags = Self.normalizedModifiers(from: event).rawValue
-            scheduleCaptureFinish()
+            updateCaptureModifiers(from: event)
+            if captureKeyCodes.isEmpty, captureMouseButtons.isEmpty {
+                scheduleCaptureFinish(after: 0.75)
+            } else {
+                scheduleCaptureFinish(after: 1.6)
+            }
+            return
+        }
+
+        if type == .keyUp {
+            capturePressedKeyCodes.remove(keyCode)
+            if hasCapturedChordInput, capturePressedKeyCodes.isEmpty, capturePressedMouseButtons.isEmpty {
+                finishCapturedBinding()
+            }
             return
         }
 
         if Self.isMouseDown(type) {
-            captureMouseButtons.insert(Self.mouseButton(from: event))
-            captureModifierFlags = Self.normalizedModifiers(from: event).rawValue
-            scheduleCaptureFinish()
+            let button = Self.mouseButton(from: event)
+            captureMouseButtons.insert(button)
+            capturePressedMouseButtons.insert(button)
+            updateCaptureModifiers(from: event)
+            scheduleCaptureFinish(after: 1.6)
+            return
+        }
+
+        if Self.isMouseUp(type) {
+            capturePressedMouseButtons.remove(Self.mouseButton(from: event))
+            if hasCapturedChordInput, capturePressedKeyCodes.isEmpty, capturePressedMouseButtons.isEmpty {
+                finishCapturedBinding()
+            }
             return
         }
 
         guard type == .flagsChanged else { return }
-        captureModifierFlags = Self.normalizedModifiers(from: event).rawValue
+        updateCaptureModifiers(from: event)
         guard captureModifierFlags != 0 else { return }
-        scheduleCaptureFinish()
+        if !hasCapturedChordInput {
+            scheduleCaptureFinish(after: 0.75)
+        }
     }
 
-    private func scheduleCaptureFinish() {
+    private var hasCapturedChordInput: Bool {
+        !captureKeyCodes.isEmpty || !captureMouseButtons.isEmpty
+    }
+
+    private func updateCaptureModifiers(from event: CGEvent) {
+        captureModifierFlags |= Self.normalizedModifiers(from: event).rawValue
+    }
+
+    private func finishCapturedBinding() {
+        let binding = HotkeyBinding(
+            keyCodes: Array(captureKeyCodes),
+            mouseButtons: Array(captureMouseButtons),
+            modifierFlags: captureModifierFlags
+        )
+        finishCapture(.captured(binding))
+    }
+
+    private func scheduleCaptureFinish(after delay: TimeInterval) {
         pendingCapture?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            let binding = HotkeyBinding(
-                keyCodes: Array(self.captureKeyCodes),
-                mouseButtons: Array(self.captureMouseButtons),
-                modifierFlags: self.captureModifierFlags
-            )
-            self.finishCapture(.captured(binding))
+            self?.finishCapturedBinding()
         }
         pendingCapture = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     private func finishCapture(_ result: HotkeyCaptureResult) {
@@ -264,6 +312,8 @@ public final class HotkeyService: @unchecked Sendable {
         self.captureHandler = nil
         captureKeyCodes.removeAll()
         captureMouseButtons.removeAll()
+        capturePressedKeyCodes.removeAll()
+        capturePressedMouseButtons.removeAll()
         captureModifierFlags = 0
         captureHandler(result)
     }

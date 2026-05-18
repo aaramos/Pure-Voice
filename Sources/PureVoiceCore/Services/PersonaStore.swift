@@ -23,6 +23,7 @@ public final class PersonaStore: @unchecked Sendable {
             name: "Polish",
             prompt: """
             Proofread and lightly shorten the following spoken text.
+            This is the balanced default: make it cleaner, smoother, and slightly shorter, but keep it recognizably in the speaker's voice.
             Correct grammar, punctuation, capitalization, obvious transcription errors, and awkward phrasing.
             Remove filler, repetition, hedging, and unnecessary setup while keeping the speaker's natural voice.
             Shorten the text enough to make it cleaner and easier to read, but do not compress it aggressively.
@@ -39,6 +40,7 @@ public final class PersonaStore: @unchecked Sendable {
             name: "Clarity",
             prompt: """
             Rewrite the following spoken text for maximum clarity.
+            Prioritize understanding over brevity: restructure sentences when needed, make relationships between ideas explicit, and choose plain direct wording.
             Fix grammar, remove filler words, untangle run-on sentences,
             and organize ideas into a logical, easy-to-follow flow.
             Preserve all facts, decisions, requests, and intent exactly as stated.
@@ -55,6 +57,8 @@ public final class PersonaStore: @unchecked Sendable {
             name: "Concise",
             prompt: """
             Make the following spoken text concise.
+            Aim for roughly half the original length when possible.
+            Prefer short complete sentences and remove setup, throat-clearing, repeated context, and weak qualifiers.
             Remove filler, repetition, hedging, and unnecessary setup while preserving the speaker's meaning.
             Keep decisions, asks, blockers, names, dates, and concrete details.
             If the spoken text asks a question, preserve it as a concise question.
@@ -69,6 +73,8 @@ public final class PersonaStore: @unchecked Sendable {
             name: "Proofread",
             prompt: """
             Proofread the following spoken text.
+            Make the smallest useful edit.
+            Preserve the original word choice, sentence order, tone, and length unless a change is required for correctness.
             Correct grammar, punctuation, capitalization, obvious transcription errors, and awkward phrasing.
             Keep the original wording and structure unless a change is needed for correctness or clarity.
             Preserve all facts, decisions, requests, and intent exactly as stated.
@@ -84,6 +90,8 @@ public final class PersonaStore: @unchecked Sendable {
             name: "Rewrite",
             prompt: """
             Rewrite the following spoken text in a clean, natural voice.
+            Recast the text more freely than Polish or Proofread.
+            Improve the flow and wording so it reads like intentional written communication, not a cleaned-up transcript.
             Improve wording, grammar, sentence flow, and readability while preserving the speaker's meaning.
             Keep the same intent, facts, asks, and level of detail.
             If the spoken text asks a question, preserve it as a polished question.
@@ -98,6 +106,8 @@ public final class PersonaStore: @unchecked Sendable {
             name: "Ultra Concise",
             prompt: """
             Compress the following spoken text to its absolute minimum.
+            Aim for no more than one quarter of the original length when possible.
+            Prefer one to three very short sentences.
             Remove everything that is not essential.
             One idea per sentence. No filler, no repetition, no softening language.
             Preserve all facts, decisions, and requests.

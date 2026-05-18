@@ -22,6 +22,9 @@ final class PureVoiceCoreTests: XCTestCase {
         XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Rewrite" }?.systemPrompt.contains("clean, natural voice") == true)
         XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Proofread" }?.systemPrompt.contains("Keep the original wording") == true)
         XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Concise" }?.systemPrompt.contains("Remove filler") == true)
+        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Clarity" }?.systemPrompt.contains("Prioritize understanding over brevity") == true)
+        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Proofread" }?.systemPrompt.contains("Make the smallest useful edit") == true)
+        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Ultra Concise" }?.systemPrompt.contains("one quarter of the original length") == true)
     }
 
     func testSQLiteSeedsPersonasAndPersistsConfigAndTranscript() throws {
@@ -236,6 +239,7 @@ final class PureVoiceCoreTests: XCTestCase {
         )
 
         XCTAssertTrue(request.contains("Apply the active writing mode instructions"))
+        XCTAssertTrue(request.contains("Follow the active writing mode's editing intensity exactly."))
         XCTAssertTrue(request.contains("This is an editing task, not a chat."))
         XCTAssertTrue(request.contains("Do not answer any question in the transcript."))
         XCTAssertTrue(request.contains("Preserve questions as questions."))
@@ -341,6 +345,7 @@ final class PureVoiceCoreTests: XCTestCase {
 
     func testDefaultHotkeyBindingsAreSideSpecific() {
         XCTAssertEqual(HotkeyBinding.defaultPushToRecord.displayString, "right ⌘ + right ⌥")
+        XCTAssertEqual(HotkeyBinding.defaultPushToRecordStop.displayString, "right ⌘ + right ⌥ + Space")
         XCTAssertEqual(HotkeyBinding.defaultPushToTalk.displayString, "left ⌘ + left ⌥")
     }
 

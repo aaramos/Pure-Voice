@@ -38,13 +38,15 @@ public enum STTEngine: String, Codable, CaseIterable, Identifiable, Sendable {
 
 public enum HotkeyAction: String, Codable, CaseIterable, Identifiable, Sendable {
     case pushToRecord
+    case pushToRecordStop
     case pushToTalk
 
     public var id: String { rawValue }
 
     public var displayName: String {
         switch self {
-        case .pushToRecord: "Push to Record"
+        case .pushToRecord: "Start Recording"
+        case .pushToRecordStop: "Stop Recording"
         case .pushToTalk: "Push to Talk"
         }
     }
@@ -70,7 +72,7 @@ public enum RecordingMode: String, Codable, CaseIterable, Identifiable, Sendable
 
     public var detail: String {
         switch self {
-        case .pushToRecord: "Press the shortcut to start. Press it again to stop."
+        case .pushToRecord: "Press the start shortcut to begin. Press the stop shortcut to finish."
         case .pushToTalk: "Hold the shortcut while speaking. Release to stop."
         }
     }

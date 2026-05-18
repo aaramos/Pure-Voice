@@ -230,7 +230,7 @@ final class AppState: ObservableObject {
     var recordingInstructionText: String {
         switch recordingMode {
         case .pushToRecord:
-            return "Press \(hotkeyDisplayText(for: .pushToRecord)) again to stop."
+            return "Stop with \(hotkeyDisplayText(for: .pushToRecordStop))."
         case .pushToTalk:
             return "Release \(hotkeyDisplayText(for: .pushToTalk)) to stop."
         }
@@ -798,7 +798,9 @@ final class AppState: ObservableObject {
 
         switch (recordingMode, action, phase) {
         case (.pushToRecord, .pushToRecord, .keyDown):
-            Task { await toggleRecording() }
+            Task { await startRecordingFromHotKey() }
+        case (.pushToRecord, .pushToRecordStop, .keyDown):
+            Task { await stopRecordingFromHotKey() }
         case (.pushToTalk, .pushToTalk, .keyDown):
             guard !pushToTalkKeyDown else { return }
             pushToTalkKeyDown = true
