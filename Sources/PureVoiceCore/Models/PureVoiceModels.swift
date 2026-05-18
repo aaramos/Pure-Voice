@@ -40,6 +40,70 @@ public enum PasteStatus: String, Codable, Sendable {
     case failed
 }
 
+public enum PasteDeliveryStatus: String, Codable, Equatable, Sendable {
+    case directAXInserted
+    case pasteEventConfirmed
+    case pasteEventSentUnconfirmed
+    case copiedOnly
+    case targetActivationFailed
+    case focusedElementUnavailable
+    case accessibilityDenied
+    case targetDidNotAcceptPaste
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+
+        if let status = Self(rawValue: value) {
+            self = status
+            return
+        }
+
+        switch value {
+        case PasteStatus.pasted.rawValue:
+            self = .pasteEventSentUnconfirmed
+        case PasteStatus.copied.rawValue:
+            self = .copiedOnly
+        case PasteStatus.failed.rawValue:
+            self = .targetDidNotAcceptPaste
+        default:
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown paste delivery status: \(value)"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
+    public var presentationStatus: PasteStatus {
+        switch self {
+        case .directAXInserted, .pasteEventConfirmed, .pasteEventSentUnconfirmed:
+            return .pasted
+        case .copiedOnly, .targetActivationFailed, .focusedElementUnavailable, .accessibilityDenied, .targetDidNotAcceptPaste:
+            return .copied
+        }
+    }
+
+    public var fallbackReason: PasteFallbackReason {
+        switch self {
+        case .directAXInserted, .pasteEventConfirmed, .pasteEventSentUnconfirmed:
+            return .none
+        case .copiedOnly:
+            return .none
+        case .targetActivationFailed:
+            return .targetActivationFailed
+        case .focusedElementUnavailable, .targetDidNotAcceptPaste:
+            return .focusedInputUnavailable
+        case .accessibilityDenied:
+            return .accessibilityPermissionMissing
+        }
+    }
+}
+
 public enum PasteFallbackReason: String, Codable, Sendable {
     case none
     case clipboardUnavailable
@@ -51,18 +115,21 @@ public enum PasteFallbackReason: String, Codable, Sendable {
 }
 
 public struct PasteDeliveryResult: Sendable {
-    public var status: PasteStatus
+    public var status: PasteDeliveryStatus
     public var fallbackReason: PasteFallbackReason
     public var target: FocusTarget?
+    public var diagnosticJSON: String?
 
     public init(
-        status: PasteStatus,
-        fallbackReason: PasteFallbackReason = .none,
-        target: FocusTarget? = nil
+        status: PasteDeliveryStatus,
+        fallbackReason: PasteFallbackReason? = nil,
+        target: FocusTarget? = nil,
+        diagnosticJSON: String? = nil
     ) {
         self.status = status
-        self.fallbackReason = fallbackReason
+        self.fallbackReason = fallbackReason ?? status.fallbackReason
         self.target = target
+        self.diagnosticJSON = diagnosticJSON
     }
 }
 
@@ -106,7 +173,8 @@ public struct TranscriptRecord: Identifiable, Codable, Sendable {
     public var transcriptionLatencyMs: Int
     public var polishingLatencyMs: Int
     public var endToEndLatencyMs: Int
-    public var pasteStatus: PasteStatus
+    public var pasteStatus: PasteDeliveryStatus
+    public var pasteFallbackReason: String?
     public var errorMessage: String?
     public var rating: Int?
     public var createdAt: Date
@@ -123,7 +191,8 @@ public struct TranscriptRecord: Identifiable, Codable, Sendable {
         transcriptionLatencyMs: Int,
         polishingLatencyMs: Int,
         endToEndLatencyMs: Int,
-        pasteStatus: PasteStatus,
+        pasteStatus: PasteDeliveryStatus,
+        pasteFallbackReason: String? = nil,
         errorMessage: String? = nil,
         rating: Int? = nil,
         createdAt: Date = Date()
@@ -140,6 +209,7 @@ public struct TranscriptRecord: Identifiable, Codable, Sendable {
         self.polishingLatencyMs = polishingLatencyMs
         self.endToEndLatencyMs = endToEndLatencyMs
         self.pasteStatus = pasteStatus
+        self.pasteFallbackReason = pasteFallbackReason
         self.errorMessage = errorMessage
         self.rating = rating
         self.createdAt = createdAt

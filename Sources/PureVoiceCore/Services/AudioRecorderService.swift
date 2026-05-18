@@ -68,6 +68,8 @@ public final class AudioRecorderService: NSObject, AVAudioRecorderDelegate, @unc
     public func currentLevel() -> Float {
         guard let recorder else { return -80 }
         recorder.updateMeters()
-        return recorder.averagePower(forChannel: 0)
+        let average = recorder.averagePower(forChannel: 0)
+        let peak = recorder.peakPower(forChannel: 0)
+        return max(average, peak - 6)
     }
 }

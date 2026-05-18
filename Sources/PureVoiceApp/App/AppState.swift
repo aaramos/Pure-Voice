@@ -20,17 +20,6 @@ enum RecordingStatus: Equatable {
     case modelUnavailable
 }
 
-private enum OutputDeliveryError: LocalizedError {
-    case clipboardUnavailable
-
-    var errorDescription: String? {
-        switch self {
-        case .clipboardUnavailable:
-            return "Pure Voice could not write the output to the clipboard."
-        }
-    }
-}
-
 private struct PolishingResult {
     var text: String
     var endpointLabel: String
@@ -73,6 +62,7 @@ final class AppState: ObservableObject {
     @Published var transcriptPreview = ""
     @Published var polishedPreview = ""
     @Published var errorMessage: String?
+    @Published var lastPasteDeliveryStatus: PasteDeliveryStatus?
     @Published var lastPasteStatus: PasteStatus?
     @Published var lastPasteFallbackReason: PasteFallbackReason?
     @Published var availableUpdate: AppUpdateInfo?
@@ -149,23 +139,34 @@ final class AppState: ObservableObject {
     }
 
     var latestOutputTitle: String {
-        switch lastPasteStatus {
-        case .pasted:
+        switch lastPasteDeliveryStatus {
+        case .directAXInserted, .pasteEventConfirmed:
             return "Pasted Into Target App"
-        case .copied:
+        case .pasteEventSentUnconfirmed:
+            return "Paste Sent"
+        case .copiedOnly, .targetActivationFailed, .focusedElementUnavailable, .accessibilityDenied, .targetDidNotAcceptPaste:
             return "Copied To Clipboard"
-        case .failed:
-            return "Output Delivery Failed"
         case nil:
-            return "Latest Output"
+            switch lastPasteStatus {
+            case .pasted:
+                return "Pasted Into Target App"
+            case .copied:
+                return "Copied To Clipboard"
+            case .failed:
+                return "Output Delivery Failed"
+            case nil:
+                return "Latest Output"
+            }
         }
     }
 
     var latestOutputInstruction: String {
-        switch lastPasteStatus {
-        case .pasted:
+        switch lastPasteDeliveryStatus {
+        case .directAXInserted, .pasteEventConfirmed:
             return "Pure Voice pasted this into the app that was active when recording started."
-        case .copied:
+        case .pasteEventSentUnconfirmed:
+            return "Pure Voice sent Command+V to the original app. That app did not expose enough text state for Pure Voice to verify insertion, so the output is also on the clipboard."
+        case .copiedOnly, .targetActivationFailed, .focusedElementUnavailable, .accessibilityDenied, .targetDidNotAcceptPaste:
             switch lastPasteFallbackReason {
             case .accessibilityPermissionMissing:
                 return "Pure Voice copied this because macOS did not confirm Accessibility control for this build. If Pure Voice is already enabled in System Settings, toggle it off and back on."
@@ -182,10 +183,17 @@ final class AppState: ObservableObject {
             case .none?, nil:
                 return "Pure Voice copied this because it could not confirm paste access to the target app. Press Command+V there, or enable Pure Voice in Accessibility if you want automatic paste."
             }
-        case .failed:
-            return "Pure Voice kept the text here. Use Copy Again, then paste it manually."
         case nil:
-            return "This is the most recent transcript output."
+            switch lastPasteStatus {
+            case .pasted:
+                return "Pure Voice pasted this into the app that was active when recording started."
+            case .copied:
+                return "Pure Voice copied this because it could not confirm paste access to the target app. Press Command+V there, or enable Pure Voice in Accessibility if you want automatic paste."
+            case .failed:
+                return "Pure Voice kept the text here. Use Copy Again, then paste it manually."
+            case nil:
+                return "This is the most recent transcript output."
+            }
         }
     }
 
@@ -310,10 +318,10 @@ final class AppState: ObservableObject {
             }
         )
 
-        _ = pasteService.hasAccessibilityPermission(prompt: false)
+        _ = pasteService.hasAccessibilityPermission(prompt: true)
         await refreshAppleFoundationAvailability()
         await ensureSTTDependencies()
-        await checkForUpdates(promptIfAvailable: true)
+        await checkForUpdates(promptIfAvailable: false)
     }
 
     func checkForUpdates(promptIfAvailable: Bool = false) async {
@@ -369,8 +377,6 @@ final class AppState: ObservableObject {
     }
 
     private func promptForUpdate(_ updateInfo: AppUpdateInfo) {
-        NSApp.activate(ignoringOtherApps: true)
-
         let alert = NSAlert()
         alert.messageText = "Pure Voice \(updateInfo.latestVersion) is available"
         alert.informativeText = "You are running \(updateInfo.currentVersion). Pure Voice can download \(updateInfo.assetName) from GitHub Releases and update itself now."
@@ -446,6 +452,7 @@ final class AppState: ObservableObject {
 
     func copyLatestOutputToClipboard() {
         _ = pasteService.copyToPasteboard(latestOutputText)
+        lastPasteDeliveryStatus = .copiedOnly
         lastPasteStatus = .copied
         lastPasteFallbackReason = PasteFallbackReason.none
         stage = .copied
@@ -531,6 +538,7 @@ final class AppState: ObservableObject {
             transcriptPreview = ""
             polishedPreview = ""
             errorMessage = nil
+            lastPasteDeliveryStatus = nil
             lastPasteStatus = nil
             lastPasteFallbackReason = nil
             originalTarget = targetAtGesture
@@ -585,18 +593,16 @@ final class AppState: ObservableObject {
             pipelineLogger.info("Pipeline polishing complete, chars=\(polished.count, privacy: .public), latencyMs=\(polishingLatency, privacy: .public)")
 
             let pasteResult = pasteService.pasteOrCopy(polished, originalTarget: originalTarget)
-            let pasteStatus = pasteResult.status
-            guard pasteStatus != .failed else {
-                _ = pasteService.copyToPasteboard(sttResult.rawText)
-                throw OutputDeliveryError.clipboardUnavailable
-            }
+            let deliveryStatus = pasteResult.status
+            let pasteStatus = deliveryStatus.presentationStatus
 
+            lastPasteDeliveryStatus = deliveryStatus
             lastPasteStatus = pasteStatus
             lastPasteFallbackReason = pasteResult.fallbackReason
             stage = pasteStatus == .pasted ? .pasted : .copied
             recordingStatus = pasteStatus == .pasted ? .pastedToField : .copiedToClipboard
             pipelineLogger.info(
-                "Pipeline delivered output with status=\(pasteStatus.rawValue, privacy: .public), fallbackReason=\(pasteResult.fallbackReason.rawValue, privacy: .public), target=\(pasteResult.target?.applicationName ?? "none", privacy: .public)"
+                "Pipeline delivered output with status=\(deliveryStatus.rawValue, privacy: .public), fallbackReason=\(pasteResult.fallbackReason.rawValue, privacy: .public), target=\(pasteResult.target?.applicationName ?? "none", privacy: .public)"
             )
 
             if saveHistory {
@@ -611,7 +617,11 @@ final class AppState: ObservableObject {
                     transcriptionLatencyMs: sttResult.latencyMs,
                     polishingLatencyMs: polishingLatency,
                     endToEndLatencyMs: Int(Date().timeIntervalSince(overallStart) * 1000),
-                    pasteStatus: pasteStatus
+                    pasteStatus: deliveryStatus,
+                    pasteFallbackReason: pasteResult.diagnosticJSON,
+                    errorMessage: pasteStatus == .copied
+                        ? "Paste delivery: \(deliveryStatus.rawValue)"
+                        : nil
                 )
                 saveTranscriptRecord(record)
             }
@@ -638,17 +648,23 @@ final class AppState: ObservableObject {
         overallStart: Date,
         error: Error
     ) {
-        let copied = pasteService.copyToPasteboard(sttResult.rawText)
+        let pasteResult = pasteService.pasteOrCopy(sttResult.rawText, originalTarget: originalTarget)
+        let pasteStatus = pasteResult.status.presentationStatus
         transcriptPreview = sttResult.rawText
         polishedPreview = sttResult.rawText
-        lastPasteStatus = copied ? .copied : .failed
-        lastPasteFallbackReason = copied ? PasteFallbackReason.none : .clipboardUnavailable
+        lastPasteDeliveryStatus = pasteResult.status
+        lastPasteStatus = pasteStatus
+        lastPasteFallbackReason = pasteResult.fallbackReason
 
-        if copied {
-            errorMessage = "Polishing failed, so the raw transcript was copied instead: \(error.localizedDescription)"
-            stage = .copied
-            recordingStatus = .copiedRawTranscript
-            pipelineLogger.info("Pipeline copied raw transcript fallback, chars=\(sttResult.rawText.count, privacy: .public)")
+        if pasteStatus != .failed {
+            errorMessage = pasteStatus == .pasted
+                ? nil
+                : "Polishing failed, so the raw transcript was copied instead: \(error.localizedDescription)"
+            stage = pasteStatus == .pasted ? .pasted : .copied
+            recordingStatus = pasteStatus == .pasted ? .pastedToField : .copiedRawTranscript
+            pipelineLogger.info(
+                "Pipeline delivered raw transcript fallback with status=\(pasteResult.status.rawValue, privacy: .public), fallbackReason=\(pasteResult.fallbackReason.rawValue, privacy: .public), target=\(pasteResult.target?.applicationName ?? "none", privacy: .public), chars=\(sttResult.rawText.count, privacy: .public)"
+            )
 
             if saveHistory {
                 let record = TranscriptRecord(
@@ -662,15 +678,18 @@ final class AppState: ObservableObject {
                     transcriptionLatencyMs: sttResult.latencyMs,
                     polishingLatencyMs: 0,
                     endToEndLatencyMs: Int(Date().timeIntervalSince(overallStart) * 1000),
-                    pasteStatus: .copied,
-                    errorMessage: error.localizedDescription
+                    pasteStatus: pasteResult.status,
+                    pasteFallbackReason: pasteResult.diagnosticJSON,
+                    errorMessage: pasteStatus == .copied
+                        ? "Polishing failed: \(error.localizedDescription); paste delivery: \(pasteResult.status.rawValue)"
+                        : error.localizedDescription
                 )
                 saveTranscriptRecord(record)
             }
 
             try? FileManager.default.removeItem(at: audioURL)
         } else {
-            failMessage("Polishing failed, and Pure Voice could not write the raw transcript to the clipboard: \(error.localizedDescription)")
+            failMessage("Polishing failed, and Pure Voice could not deliver the raw transcript: \(error.localizedDescription)")
         }
     }
 
@@ -790,8 +809,9 @@ final class AppState: ObservableObject {
 
     private func updateWaveformLevel() {
         let db = audioRecorder.currentLevel()
-        let normalized = max(0, min(1, (CGFloat(db) + 60) / 60))
-        let height = 4 + normalized * 48
+        let normalized = max(0, min(1, (CGFloat(db) + 58) / 46))
+        let boosted = pow(normalized, 0.55)
+        let height = 6 + boosted * 58
 
         if waveformLevels.isEmpty {
             waveformLevels = Array(repeating: 4, count: 37) + [height]
@@ -836,8 +856,8 @@ final class AppState: ObservableObject {
     }
 
     func openSettings() {
+        AppDelegate.promoteForUserFacingWindow()
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        NSApp.activate(ignoringOtherApps: true)
         recordingStatus = .idle
     }
 

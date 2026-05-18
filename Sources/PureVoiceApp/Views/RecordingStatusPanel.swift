@@ -21,8 +21,9 @@ final class RecordingStatusPanel: NSPanel {
             defer: false
         )
 
-        level = .floating
+        level = .statusBar
         becomesKeyOnlyIfNeeded = true
+        hidesOnDeactivate = false
         isMovableByWindowBackground = false
         hasShadow = false
         isOpaque = false

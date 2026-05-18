@@ -118,7 +118,7 @@ struct WaveformView: View {
 
     private var liveIntensity: CGFloat {
         let maxLevel = paddedLevels.max() ?? 4
-        return max(0, min(1, (maxLevel - 4) / 48))
+        return max(0, min(1, (maxLevel - 6) / 58))
     }
 
     private var paddedLevels: [CGFloat] {

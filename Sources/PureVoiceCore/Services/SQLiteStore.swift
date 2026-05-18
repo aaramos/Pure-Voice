@@ -77,6 +77,7 @@ public final class SQLiteStore: @unchecked Sendable {
             polishing_latency_ms INTEGER NOT NULL,
             end_to_end_latency_ms INTEGER NOT NULL,
             paste_status TEXT NOT NULL,
+            paste_fallback_reason TEXT,
             error_message TEXT,
             rating INTEGER,
             created_at TEXT NOT NULL
@@ -89,6 +90,7 @@ public final class SQLiteStore: @unchecked Sendable {
         );
 
         """)
+        try migrateTranscriptDiagnostics()
         try cleanupRemovedV1State()
         try seedDefaultPersonasIfNeeded()
         try migrateDefaultPersonas()
@@ -200,6 +202,10 @@ public final class SQLiteStore: @unchecked Sendable {
         try saveConfig(key: "active_persona_id", valueJSON: "\"\(PersonaDefaults.defaultPersonaID)\"")
     }
 
+    public func transcriptColumnNames() throws -> Set<String> {
+        try tableColumnNames(table: "transcripts")
+    }
+
     public func loadPersonas() throws -> [Persona] {
         try locked {
             let statement = try prepare("""
@@ -292,9 +298,9 @@ public final class SQLiteStore: @unchecked Sendable {
             INSERT INTO transcripts (
                 id, raw_text, polished_text, persona_id, stt_engine, stt_model, llm_endpoint_url,
                 llm_model, transcription_latency_ms, polishing_latency_ms, end_to_end_latency_ms,
-                paste_status, error_message, rating, created_at
+                paste_status, paste_fallback_reason, error_message, rating, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """)
             defer { sqlite3_finalize(statement) }
 
@@ -310,15 +316,35 @@ public final class SQLiteStore: @unchecked Sendable {
             sqlite3_bind_int(statement, 10, Int32(record.polishingLatencyMs))
             sqlite3_bind_int(statement, 11, Int32(record.endToEndLatencyMs))
             bindText(statement, 12, record.pasteStatus.rawValue)
-            bindText(statement, 13, record.errorMessage)
+            bindText(statement, 13, record.pasteFallbackReason)
+            bindText(statement, 14, record.errorMessage)
             if let rating = record.rating {
-                sqlite3_bind_int(statement, 14, Int32(rating))
+                sqlite3_bind_int(statement, 15, Int32(rating))
             } else {
-                sqlite3_bind_null(statement, 14)
+                sqlite3_bind_null(statement, 15)
             }
-            bindText(statement, 15, formatDate(record.createdAt))
+            bindText(statement, 16, formatDate(record.createdAt))
 
             try stepDone(statement)
+        }
+    }
+
+    private func migrateTranscriptDiagnostics() throws {
+        let columns = try tableColumnNames(table: "transcripts")
+        guard !columns.contains("paste_fallback_reason") else { return }
+        try execute("ALTER TABLE transcripts ADD COLUMN paste_fallback_reason TEXT;")
+    }
+
+    private func tableColumnNames(table: String) throws -> Set<String> {
+        try locked {
+            let statement = try prepare("PRAGMA table_info(\(table));")
+            defer { sqlite3_finalize(statement) }
+
+            var columns = Set<String>()
+            while sqlite3_step(statement) == SQLITE_ROW {
+                columns.insert(columnText(statement, 1))
+            }
+            return columns
         }
     }
 

@@ -50,8 +50,137 @@ final class PureVoiceCoreTests: XCTestCase {
             transcriptionLatencyMs: 100,
             polishingLatencyMs: 200,
             endToEndLatencyMs: 300,
-            pasteStatus: .copied
+            pasteStatus: .copiedOnly
         ))
+    }
+
+    func testTargetAppProfileDetectsElectronTargets() {
+        XCTAssertTrue(TargetAppProfile(bundleIdentifier: "com.openai.codex").isElectronTarget)
+        XCTAssertTrue(TargetAppProfile(bundleIdentifier: "com.anthropic.claudefordesktop").isElectronTarget)
+        XCTAssertTrue(TargetAppProfile(bundleIdentifier: "com.github.GitHubClient").isElectronTarget)
+        XCTAssertTrue(TargetAppProfile(bundleIdentifier: "com.tinyspeck.slackmacgap").isElectronTarget)
+        XCTAssertTrue(TargetAppProfile(bundleIdentifier: "com.microsoft.VSCode").isElectronTarget)
+        XCTAssertTrue(TargetAppProfile(bundleIdentifier: "com.todesktop.example").isElectronTarget)
+        XCTAssertTrue(TargetAppProfile(bundleIdentifier: "com.electron.example").isElectronTarget)
+        XCTAssertTrue(TargetAppProfile(bundleIdentifier: "com.apple.TextEdit", hasWebAreaAncestor: true).isElectronTarget)
+        XCTAssertFalse(TargetAppProfile(bundleIdentifier: "com.apple.TextEdit").isElectronTarget)
+        XCTAssertFalse(TargetAppProfile(bundleIdentifier: nil).isElectronTarget)
+    }
+
+    func testPasteDeliveryStatusDecodesLegacyStatuses() throws {
+        let decoder = JSONDecoder()
+
+        XCTAssertEqual(
+            try decoder.decode(PasteDeliveryStatus.self, from: #""pasted""#.data(using: .utf8)!),
+            .pasteEventSentUnconfirmed
+        )
+        XCTAssertEqual(
+            try decoder.decode(PasteDeliveryStatus.self, from: #""copied""#.data(using: .utf8)!),
+            .copiedOnly
+        )
+        XCTAssertEqual(
+            try decoder.decode(PasteDeliveryStatus.self, from: #""failed""#.data(using: .utf8)!),
+            .targetDidNotAcceptPaste
+        )
+    }
+
+    func testSQLitePersistsPasteDeliveryStatusAndDiagnostics() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pure-voice-paste-status-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let store = try SQLiteStore(databaseURL: url)
+        let diagnostics = PasteDeliveryDiagnostics(
+            bundleID: "com.openai.codex",
+            pid: 1234,
+            appName: "Codex",
+            axTrusted: true,
+            focusedRole: "AXTextArea",
+            isElectronTarget: true,
+            pasteboardChangeCountBefore: 4,
+            pasteboardChangeCountAfter: 5,
+            cmdVPosted: true,
+            cmdVRoute: "hidEventTap",
+            verifiedValueChanged: nil,
+            finalStatus: .pasteEventSentUnconfirmed
+        ).jsonString
+        let recordID = UUID().uuidString
+
+        try store.insertTranscript(TranscriptRecord(
+            id: recordID,
+            rawText: "raw",
+            polishedText: "polished",
+            personaID: "polish",
+            sttEngine: "whisper",
+            sttModel: "base.en",
+            llmEndpointURL: "apple-foundation-models",
+            llmModel: "Apple Foundation Models",
+            transcriptionLatencyMs: 100,
+            polishingLatencyMs: 200,
+            endToEndLatencyMs: 300,
+            pasteStatus: .pasteEventSentUnconfirmed,
+            pasteFallbackReason: diagnostics
+        ))
+
+        let row = try sqliteRow(
+            at: url,
+            query: "SELECT paste_status, paste_fallback_reason FROM transcripts WHERE id = '\(recordID)' LIMIT 1;"
+        )
+        XCTAssertEqual(row, ["pasteEventSentUnconfirmed", diagnostics])
+    }
+
+    func testSQLiteMigratesPasteFallbackReasonColumn() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pure-voice-paste-migration-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+        defer {
+            if let db {
+                sqlite3_close(db)
+            }
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        let sql = """
+        CREATE TABLE transcripts (
+            id TEXT PRIMARY KEY,
+            raw_text TEXT NOT NULL,
+            polished_text TEXT NOT NULL,
+            persona_id TEXT NOT NULL,
+            stt_engine TEXT NOT NULL,
+            stt_model TEXT NOT NULL,
+            llm_endpoint_url TEXT NOT NULL,
+            llm_model TEXT NOT NULL,
+            transcription_latency_ms INTEGER NOT NULL,
+            polishing_latency_ms INTEGER NOT NULL,
+            end_to_end_latency_ms INTEGER NOT NULL,
+            paste_status TEXT NOT NULL,
+            error_message TEXT,
+            rating INTEGER,
+            created_at TEXT NOT NULL
+        );
+        INSERT INTO transcripts VALUES (
+            'existing', 'raw', 'polished', 'polish', 'whisper', 'base.en',
+            'apple-foundation-models', 'Apple Foundation Models',
+            100, 200, 300, 'pasted', NULL, NULL, '\(now)'
+        );
+        """
+        XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK)
+        if let db {
+            sqlite3_close(db)
+        }
+        db = nil
+
+        let store = try SQLiteStore(databaseURL: url)
+        XCTAssertTrue(try store.transcriptColumnNames().contains("paste_fallback_reason"))
+
+        let row = try sqliteRow(
+            at: url,
+            query: "SELECT paste_status, paste_fallback_reason FROM transcripts WHERE id = 'existing' LIMIT 1;"
+        )
+        XCTAssertEqual(row, ["pasted", nil])
     }
 
     func testSQLiteMigratesExistingPersonasToPolishDefault() throws {
@@ -401,6 +530,30 @@ final class PureVoiceCoreTests: XCTestCase {
         normalizedForComparison(value)
             .split(separator: " ")
             .count
+    }
+
+    private func sqliteRow(at url: URL, query: String) throws -> [String?] {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+        defer {
+            if let db {
+                sqlite3_close(db)
+            }
+        }
+
+        var statement: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(db, query, -1, &statement, nil), SQLITE_OK)
+        defer { sqlite3_finalize(statement) }
+
+        XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
+        let columnCount = sqlite3_column_count(statement)
+        return (0..<columnCount).map { index in
+            guard sqlite3_column_type(statement, index) != SQLITE_NULL,
+                  let raw = sqlite3_column_text(statement, index) else {
+                return nil
+            }
+            return String(cString: raw)
+        }
     }
 
 }
