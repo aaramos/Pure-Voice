@@ -27,6 +27,26 @@ struct SettingsView: View {
 
     private var recordingTab: some View {
         VStack(alignment: .leading, spacing: 18) {
+            GroupBox("Recording Mode") {
+                VStack(alignment: .leading, spacing: 14) {
+                    Picker("Mode", selection: $state.recordingMode) {
+                        ForEach(RecordingMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+
+                    ForEach(RecordingMode.allCases) { mode in
+                        if state.recordingMode == mode {
+                            Text(mode.detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             GroupBox("Hotkeys") {
                 VStack(alignment: .leading, spacing: 16) {
                     hotkeyRow(.pushToRecord, subtitle: "Start or stop a recording.")

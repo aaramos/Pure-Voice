@@ -81,6 +81,9 @@ final class AppState: ObservableObject {
     @Published var hotkeyBindings: [HotkeyAction: HotkeyBinding] = HotkeyBinding.defaultBindings
     @Published var capturingHotkeyAction: HotkeyAction?
     @Published var hotkeyCaptureStatus: String?
+    @Published var recordingMode: RecordingMode = .pushToRecord {
+        didSet { saveStringConfig("recording_mode", recordingMode.rawValue) }
+    }
     @Published var recordingStatus: RecordingStatus = .idle {
         didSet { handleRecordingStatusTransition(from: oldValue, to: recordingStatus) }
     }
@@ -100,6 +103,7 @@ final class AppState: ObservableObject {
     private var meteringTimer: Timer?
     private var recordingStatusPanel: RecordingStatusPanel?
     private var recordingStatusDismissTask: Task<Void, Never>?
+    private var pushToTalkKeyDown = false
 
     init() {
         appleFoundationAvailability = AppleFoundationModelClient.availability
@@ -189,6 +193,15 @@ final class AppState: ObservableObject {
             return "Pure Voice kept the text here. Use Copy Again, then paste it manually."
         case nil:
             return "This is the most recent transcript output."
+        }
+    }
+
+    var recordingInstructionText: String {
+        switch recordingMode {
+        case .pushToRecord:
+            return "Press \(hotkeyDisplayText(for: .pushToRecord)) again to stop."
+        case .pushToTalk:
+            return "Release \(hotkeyDisplayText(for: .pushToTalk)) to stop."
         }
     }
 
@@ -290,6 +303,12 @@ final class AppState: ObservableObject {
             }
             saveHistory = readBoolConfig("save_history") ?? true
             hotkeyBindings = readHotkeyBindings()
+            if let rawRecordingMode = readStringConfig("recording_mode"),
+               let mode = RecordingMode(rawValue: rawRecordingMode) {
+                recordingMode = mode
+            } else {
+                recordingMode = .pushToRecord
+            }
         } catch {
             errorMessage = error.localizedDescription
             stage = .error
@@ -557,12 +576,19 @@ final class AppState: ObservableObject {
 
     private func handleHotkeyEvent(action: HotkeyAction, phase: HotkeyPhase) {
         guard capturingHotkeyAction == nil else { return }
-        guard phase == .keyDown else { return }
 
-        switch action {
-        case .pushToRecord:
+        switch (recordingMode, action, phase) {
+        case (.pushToRecord, .pushToRecord, .keyDown):
             Task { await toggleRecording() }
-        case .pushToTalk:
+        case (.pushToTalk, .pushToTalk, .keyDown):
+            guard !pushToTalkKeyDown else { return }
+            pushToTalkKeyDown = true
+            Task { await startRecordingFromHotKey() }
+        case (.pushToTalk, .pushToTalk, .keyUp):
+            guard pushToTalkKeyDown else { return }
+            pushToTalkKeyDown = false
+            Task { await stopRecordingFromHotKey() }
+        default:
             return
         }
     }
@@ -790,6 +816,7 @@ final class AppState: ObservableObject {
     private func failMessage(_ message: String) {
         errorMessage = message
         stage = .error
+        pushToTalkKeyDown = false
         if recordingStatus != .modelUnavailable {
             recordingStatus = .idle
         }

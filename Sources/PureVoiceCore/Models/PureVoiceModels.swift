@@ -53,6 +53,27 @@ public enum HotkeyPhase: String, Codable, Sendable {
     case keyUp
 }
 
+public enum RecordingMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case pushToRecord
+    case pushToTalk
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .pushToRecord: "Push to Record"
+        case .pushToTalk: "Push to Talk"
+        }
+    }
+
+    public var detail: String {
+        switch self {
+        case .pushToRecord: "Press the shortcut to start. Press it again to stop."
+        case .pushToTalk: "Hold the shortcut while speaking. Release to stop."
+        }
+    }
+}
+
 public struct HotkeyBinding: Codable, Equatable, Sendable {
     public var keyCode: UInt16
     public var modifierFlags: UInt64

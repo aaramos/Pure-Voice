@@ -43,12 +43,21 @@ struct HUDView: View {
                     .font(.callout)
                     .lineLimit(4)
             } else {
-                Text("Start with \(state.hotkeyDisplayText(for: .pushToRecord)).")
+                Text(startInstruction)
                     .foregroundStyle(.secondary)
             }
         }
         .padding(18)
         .frame(minWidth: 340, minHeight: 180)
         .background(.regularMaterial)
+    }
+
+    private var startInstruction: String {
+        switch state.recordingMode {
+        case .pushToRecord:
+            return "Start with \(state.hotkeyDisplayText(for: .pushToRecord))."
+        case .pushToTalk:
+            return "Hold \(state.hotkeyDisplayText(for: .pushToTalk)) while speaking."
+        }
     }
 }
