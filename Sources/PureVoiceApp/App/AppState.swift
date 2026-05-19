@@ -9,6 +9,11 @@ private let pipelineLogger = Logger(
     category: "Pipeline"
 )
 
+private let onboardingLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "com.adrian.purevoice",
+    category: "Onboarding"
+)
+
 enum RecordingStatus: Equatable {
     case idle
     case recording
@@ -68,6 +73,8 @@ struct AttentionGuidance: Equatable {
 
 @MainActor
 final class AppState: ObservableObject {
+    static let onboardingCompletedDefaultsKey = "hasCompletedOnboarding"
+
     @Published var stage: AppStage = .idle
     @Published var personas: [Persona] = []
     @Published var personaPromptDrafts: [String: String] = [:]
@@ -126,6 +133,8 @@ final class AppState: ObservableObject {
     private var recordingStatusPanel: RecordingStatusPanel?
     private var settingsWindow: NSWindow?
     private var settingsWindowDelegate: SettingsWindowDelegate?
+    private var onboardingWindow: NSWindow?
+    private var onboardingWindowDelegate: OnboardingWindowDelegate?
     private var recordingStatusDismissTask: Task<Void, Never>?
     private var personaPromptSaveTasks: [String: Task<Void, Never>] = [:]
     private var personaPreviewTasks: [String: Task<Void, Never>] = [:]
@@ -137,6 +146,25 @@ final class AppState: ObservableObject {
 
     init() {
         appleFoundationAvailability = AppleFoundationModelClient.availability
+    }
+
+    static func migrateOnboardingSentinelIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: onboardingCompletedDefaultsKey) == nil else { return }
+
+        if existingDatabaseFileExists() {
+            defaults.set(true, forKey: onboardingCompletedDefaultsKey)
+        }
+    }
+
+    private static func existingDatabaseFileExists() -> Bool {
+        let supportDirectory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0]
+            .appendingPathComponent("Pure Voice", isDirectory: true)
+        let databaseURL = supportDirectory.appendingPathComponent("pure_voice.sqlite")
+        return FileManager.default.fileExists(atPath: databaseURL.path)
     }
 
     var selectedPersona: Persona {
@@ -373,7 +401,11 @@ final class AppState: ObservableObject {
 
         _ = pasteService.hasAccessibilityPermission(prompt: false)
         await refreshAppleFoundationAvailability()
-        await ensureSTTDependencies()
+        if UserDefaults.standard.bool(forKey: Self.onboardingCompletedDefaultsKey) {
+            await ensureSTTDependencies()
+        } else {
+            await refreshSTTHealth()
+        }
         await checkForUpdates(promptIfAvailable: true)
     }
 
@@ -489,6 +521,53 @@ final class AppState: ObservableObject {
         case .startRecording:
             Task { await startRecording() }
         }
+    }
+
+    func completeOnboarding() {
+        UserDefaults.standard.set(true, forKey: Self.onboardingCompletedDefaultsKey)
+    }
+
+    func openOnboardingIfNeeded() {
+        let completed = UserDefaults.standard.bool(forKey: Self.onboardingCompletedDefaultsKey)
+        onboardingLogger.info("openOnboardingIfNeeded completed=\(completed, privacy: .public)")
+        guard !completed else { return }
+
+        if onboardingWindow == nil {
+            createOnboardingWindow()
+        }
+
+        guard let onboardingWindow else { return }
+        NSApp.setActivationPolicy(.regular)
+        NSApp.unhide(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        onboardingWindow.level = .modalPanel
+        onboardingWindow.collectionBehavior.insert(.moveToActiveSpace)
+        onboardingWindow.setIsVisible(true)
+        onboardingWindow.makeKeyAndOrderFront(nil)
+        onboardingWindow.orderFrontRegardless()
+        NSApp.arrangeInFront(nil)
+        onboardingWindow.displayIfNeeded()
+        onboardingLogger.info("Welcome window ordered front")
+    }
+
+    func requestMicrophonePermissionForOnboarding() async -> Bool {
+        await audioRecorder.requestPermission()
+    }
+
+    func requestAccessibilityPermissionForOnboarding(prompt: Bool) -> Bool {
+        pasteService.hasAccessibilityPermission(prompt: prompt)
+    }
+
+    func openMicrophonePrivacySettings() {
+        openSystemSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+    }
+
+    func openAccessibilityPrivacySettings() {
+        openSystemSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+    }
+
+    func openAppleIntelligenceSettings() {
+        openSystemSettingsPane("x-apple.systempreferences:com.apple.Apple-Intelligence-Settings.extension")
     }
 
     func copyAttentionDetailsToClipboard() {
@@ -658,6 +737,32 @@ final class AppState: ObservableObject {
         async let parakeet = sttClient.health(engine: .parakeet)
         whisperHealth = await whisper
         parakeetHealth = await parakeet
+    }
+
+    func sttHealth(for engine: STTEngine) -> STTHealth {
+        switch engine {
+        case .whisper:
+            whisperHealth
+        case .parakeet:
+            parakeetHealth
+        }
+    }
+
+    func sttEngineIsAvailable(_ engine: STTEngine) -> Bool {
+        sttHealth(for: engine).available
+    }
+
+    func selectInstalledSTTEngineFromInstallFlow(_ engine: STTEngine) {
+        selectedSTTEngine = engine
+        sttNotice = nil
+    }
+
+    func displaySTTHealthMessage(for health: STTHealth) -> String {
+        Self.userFacingSTTMessage(from: health.message, available: health.available)
+    }
+
+    func displaySTTInstallError(from rawMessage: String) -> String {
+        Self.userFacingInstallError(from: rawMessage)
     }
 
     func ensureSTTDependencies() async {
@@ -1215,6 +1320,59 @@ final class AppState: ObservableObject {
         }
     }
 
+    private static func userFacingSTTMessage(from rawMessage: String, available: Bool) -> String {
+        let message = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else {
+            return available ? "Ready" : "Not installed"
+        }
+
+        let lowered = message.lowercased()
+        if available {
+            return message
+        }
+
+        if lowered.contains("not checked") {
+            return "Not checked"
+        }
+        if lowered.contains("installing") {
+            return message
+        }
+        if lowered.contains("not installed") || lowered.contains("missing") || lowered.contains("not found") {
+            return "Not installed"
+        }
+        if lowered.contains("permission denied") || lowered.contains("read-only") {
+            return "Permission needed"
+        }
+        if lowered.contains("network") || lowered.contains("timed out") || lowered.contains("timeout") {
+            return "Download unavailable"
+        }
+        if message.contains("/") || lowered.contains("stt helper") || lowered.contains("stt_helper.py") {
+            return "Setup needs attention"
+        }
+        return message
+    }
+
+    private static func userFacingInstallError(from rawMessage: String) -> String {
+        let lowered = rawMessage.lowercased()
+
+        if lowered.contains("network") || lowered.contains("could not reach") || lowered.contains("couldn't reach") {
+            return "Pure Voice couldn't reach the download server. Check your internet connection and try again."
+        }
+        if lowered.contains("timed out") || lowered.contains("timeout") || lowered.contains("interrupted") || lowered.contains("partial") {
+            return "The download was interrupted. This usually fixes itself on retry."
+        }
+        if lowered.contains("no space") || lowered.contains("disk full") || lowered.contains("errno 28") {
+            return "Your startup disk is low on space. Free up at least 1 GB and try again."
+        }
+        if lowered.contains("permission denied") || lowered.contains("read-only") || lowered.contains("errno 13") || lowered.contains("errno 30") {
+            return "Pure Voice doesn't have permission to write to Application Support."
+        }
+        if lowered.contains("checksum") || lowered.contains("verification") || lowered.contains("verify") {
+            return "The download didn't complete cleanly. This usually fixes itself on retry."
+        }
+        return "Something went wrong during installation. Try again, or use Whisper instead."
+    }
+
     private func setHotkeyBinding(_ binding: HotkeyBinding, for action: HotkeyAction) {
         hotkeyBindings[action] = binding
         saveHotkeyBindingConfig(binding, for: action)
@@ -1368,6 +1526,48 @@ final class AppState: ObservableObject {
         settingsWindow = window
     }
 
+    private func createOnboardingWindow() {
+        onboardingLogger.info("Creating welcome window")
+        let rootView = WelcomeView { [weak self] in
+            self?.finishOnboarding()
+        }
+        .environmentObject(self)
+        .frame(width: 640, height: 480)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Welcome to Pure Voice"
+        window.identifier = NSUserInterfaceItemIdentifier("PureVoiceWelcomeWindow")
+        window.isReleasedWhenClosed = false
+        window.isRestorable = false
+        window.standardWindowButton(.closeButton)?.isEnabled = false
+        window.contentMinSize = NSSize(width: 640, height: 480)
+        window.contentMaxSize = NSSize(width: 640, height: 480)
+        window.contentView = NSHostingView(rootView: rootView)
+        window.center()
+
+        let delegate = OnboardingWindowDelegate { [weak self] in
+            self?.onboardingWindow = nil
+            self?.onboardingWindowDelegate = nil
+        }
+        window.delegate = delegate
+        onboardingWindowDelegate = delegate
+        onboardingWindow = window
+        onboardingLogger.info("Welcome window created")
+    }
+
+    private func finishOnboarding() {
+        completeOnboarding()
+        onboardingWindow?.close()
+        onboardingWindow = nil
+        onboardingWindowDelegate = nil
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     private func openSystemSettingsPane(_ urlString: String) {
         guard let url = URL(string: urlString) else { return }
         NSWorkspace.shared.open(url)
@@ -1376,6 +1576,18 @@ final class AppState: ObservableObject {
 }
 
 private final class SettingsWindowDelegate: NSObject, NSWindowDelegate {
+    private let onClose: () -> Void
+
+    init(onClose: @escaping () -> Void) {
+        self.onClose = onClose
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose()
+    }
+}
+
+private final class OnboardingWindowDelegate: NSObject, NSWindowDelegate {
     private let onClose: () -> Void
 
     init(onClose: @escaping () -> Void) {
