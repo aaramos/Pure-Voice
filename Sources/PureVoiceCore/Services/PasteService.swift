@@ -89,7 +89,7 @@ public final class PasteService: @unchecked Sendable {
             return PasteDeliveryResult(status: .pasted, target: target)
         }
 
-        guard postCommandV() else {
+        guard postCommandVIntoFocusedInput(text, target: target) else {
             return PasteDeliveryResult(status: .copied, fallbackReason: .focusedInputUnavailable, target: target)
         }
 
@@ -224,17 +224,20 @@ public final class PasteService: @unchecked Sendable {
     }
 
     private func writeDirectly(_ text: String, to element: AXUIElement) -> Bool {
+        let beforeValue = stringValue(in: element)
+        let beforeRange = selectedTextRange(in: element)
+
         if AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFTypeRef) == .success {
-            return true
+            if waitForInsertedText(text, in: element, previousValue: beforeValue, selectedRange: beforeRange) {
+                return true
+            }
         }
 
-        var rawValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &rawValue) == .success,
-              let currentValue = rawValue as? String else {
+        guard let currentValue = beforeValue else {
             return false
         }
 
-        guard let selectedRange = selectedTextRange(in: element) else {
+        guard let selectedRange = beforeRange else {
             return false
         }
         guard let nextValue = Self.replacingSelectedText(
@@ -255,6 +258,18 @@ public final class PasteService: @unchecked Sendable {
         }
 
         return true
+    }
+
+    private func postCommandVIntoFocusedInput(_ text: String, target: FocusTarget) -> Bool {
+        guard let element = focusedElement(matching: target) else {
+            _ = postCommandV()
+            return false
+        }
+
+        let beforeValue = stringValue(in: element)
+        let beforeRange = selectedTextRange(in: element)
+        guard postCommandV() else { return false }
+        return waitForInsertedText(text, in: element, previousValue: beforeValue, selectedRange: beforeRange)
     }
 
     private func capturedElement(matching target: FocusTarget) -> AXUIElement? {
@@ -312,6 +327,58 @@ public final class PasteService: @unchecked Sendable {
         var range = CFRange(location: 0, length: 0)
         guard AXValueGetValue(axRange, .cfRange, &range) else { return nil }
         return range
+    }
+
+    private func stringValue(in element: AXUIElement) -> String? {
+        var rawValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &rawValue) == .success else {
+            return nil
+        }
+        return rawValue as? String
+    }
+
+    private func waitForInsertedText(
+        _ text: String,
+        in element: AXUIElement,
+        previousValue: String?,
+        selectedRange: CFRange?
+    ) -> Bool {
+        let expectedValue: String?
+        if let previousValue, let selectedRange {
+            expectedValue = Self.replacingSelectedText(
+                in: previousValue,
+                with: text,
+                selectedRange: selectedRange
+            )
+        } else {
+            expectedValue = nil
+        }
+
+        let deadline = Date().addingTimeInterval(1.0)
+        while Date() < deadline {
+            if insertedTextIsVisible(text, in: element, previousValue: previousValue, expectedValue: expectedValue) {
+                return true
+            }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+
+        return insertedTextIsVisible(text, in: element, previousValue: previousValue, expectedValue: expectedValue)
+    }
+
+    private func insertedTextIsVisible(
+        _ text: String,
+        in element: AXUIElement,
+        previousValue: String?,
+        expectedValue: String?
+    ) -> Bool {
+        guard let currentValue = stringValue(in: element) else { return false }
+        if let expectedValue {
+            return currentValue == expectedValue
+        }
+        if let previousValue, currentValue == previousValue {
+            return false
+        }
+        return currentValue.contains(text)
     }
 
     static func replacingSelectedText(

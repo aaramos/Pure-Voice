@@ -1033,11 +1033,10 @@ final class AppState: ObservableObject {
                 throw STTHelperError.helperMissing("stt_helper.py")
             }
 
-            pipelineLogger.info("Pipeline transcribe started using \(recordingEngine.rawValue, privacy: .public)")
-            let sttResult = try await sttClient.transcribe(
+            let sttResult = try await transcribeWithFallback(
                 audioURL: audioURL,
-                engine: recordingEngine,
-                model: nil
+                preferredEngine: recordingEngine,
+                sttClient: sttClient
             )
             fallbackSTTResult = sttResult
             transcriptPreview = sttResult.rawText
@@ -1143,6 +1142,42 @@ final class AppState: ObservableObject {
             try? FileManager.default.removeItem(at: audioURL)
         } else {
             failMessage("Polishing failed, and Pure Voice could not write the raw transcript to the clipboard: \(error.localizedDescription)")
+        }
+    }
+
+    private func transcribeWithFallback(
+        audioURL: URL,
+        preferredEngine: STTEngine,
+        sttClient: STTHelperClient
+    ) async throws -> STTResult {
+        pipelineLogger.info("Pipeline transcribe started using \(preferredEngine.rawValue, privacy: .public)")
+        do {
+            return try await sttClient.transcribe(
+                audioURL: audioURL,
+                engine: preferredEngine,
+                model: nil
+            )
+        } catch {
+            guard preferredEngine == .parakeet else {
+                throw error
+            }
+
+            pipelineLogger.error("Parakeet transcription failed; trying Whisper fallback: \(error.localizedDescription, privacy: .public)")
+            let whisper = await sttClient.health(engine: .whisper)
+            whisperHealth = whisper
+            guard whisper.available else {
+                throw error
+            }
+
+            selectedSTTEngine = .whisper
+            sttNotice = "Parakeet failed, so Pure Voice switched back to Whisper."
+            let fallback = try await sttClient.transcribe(
+                audioURL: audioURL,
+                engine: .whisper,
+                model: nil
+            )
+            pipelineLogger.info("Whisper fallback transcription succeeded, chars=\(fallback.rawText.count, privacy: .public)")
+            return fallback
         }
     }
 
