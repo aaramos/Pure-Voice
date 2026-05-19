@@ -89,24 +89,49 @@ def run_checked(command, description, cwd=None):
         raise RuntimeError(f"{description} failed: {output or exc}") from exc
 
 
+def venv_has_pip():
+    if not VENV_PYTHON.exists():
+        return False
+    try:
+        subprocess.run(
+            [str(VENV_PYTHON), "-m", "pip", "--version"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def ensure_venv_pip():
+    if not VENV_PYTHON.exists() or venv_has_pip():
+        return
+
+    run_checked([str(VENV_PYTHON), "-m", "ensurepip", "--upgrade"], "Bootstrapping pip")
+    run_checked([str(VENV_PYTHON), "-m", "pip", "install", "--upgrade", "pip"], "Updating pip")
+
+
 def create_or_reuse_venv():
     STT_DIR.mkdir(parents=True, exist_ok=True)
     MPLCONFIG_DIR.mkdir(parents=True, exist_ok=True)
     prepare_venv_dir()
 
     if VENV_PYTHON.exists():
+        ensure_venv_pip()
         return
 
     uv = find_executable("uv")
     if uv:
-        run_checked([uv, "venv", str(VENV_DIR), "--python", "python3.12"], "Creating STT Python environment")
+        run_checked([uv, "venv", str(VENV_DIR), "--python", "python3.12", "--seed"], "Creating STT Python environment")
         return
 
     python_bin = find_executable("python3.12", "python3.11", "python3")
     if not python_bin:
         raise RuntimeError("Python 3 was not found. Install Python 3, then reopen Pure Voice.")
     run_checked([python_bin, "-m", "venv", str(VENV_DIR)], "Creating STT Python environment")
-    run_checked([str(VENV_PYTHON), "-m", "pip", "install", "--upgrade", "pip"], "Updating pip")
+    ensure_venv_pip()
 
 
 def verify_venv_whisper_health():
@@ -217,6 +242,7 @@ def install_whisper():
             "Installing faster-whisper",
         )
     else:
+        ensure_venv_pip()
         run_checked([str(VENV_PYTHON), "-m", "pip", "install", "faster-whisper"], "Installing faster-whisper")
 
     health = verify_venv_whisper_health()
@@ -241,6 +267,7 @@ def install_parakeet():
             "Installing parakeet-mlx",
         )
     else:
+        ensure_venv_pip()
         run_checked([str(VENV_PYTHON), "-m", "pip", "install", "-U", "parakeet-mlx"], "Installing parakeet-mlx")
 
     emit_progress("Checking Parakeet...")
