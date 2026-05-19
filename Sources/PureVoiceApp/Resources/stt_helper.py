@@ -16,7 +16,7 @@ VENV_DIR = STT_DIR / ".venv"
 VENV_PYTHON = VENV_DIR / "bin" / "python"
 WHISPER_CPP_MODEL = APP_SUPPORT / "Models" / "whisper.cpp" / "ggml-base.en.bin"
 MPLCONFIG_DIR = STT_DIR / "matplotlib"
-PARAKEET_MODEL = "mlx-community/parakeet-tdt-0.6b-v2"
+PARAKEET_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
 
 try:
     MPLCONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -400,6 +400,27 @@ def read_parakeet_transcript(output_dir, stdout_text):
     return ""
 
 
+def parakeet_output_diagnostics(output_dir, stdout_text, stderr_text):
+    files = []
+    for path in sorted(output_dir.iterdir()):
+        if not path.is_file():
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = -1
+        files.append(f"{path.name} ({size} bytes)")
+
+    parts = []
+    if files:
+        parts.append("files: " + ", ".join(files))
+    if stdout_text.strip():
+        parts.append("stdout: " + stdout_text.strip()[-1000:])
+    if stderr_text.strip():
+        parts.append("stderr: " + stderr_text.strip()[-1000:])
+    return "; ".join(parts) if parts else "no output files or process output"
+
+
 def transcribe_whisper(audio_path, model_name):
     stub = os.environ.get("PURE_VOICE_STT_STUB_TEXT")
     if stub:
@@ -428,13 +449,24 @@ def transcribe_parakeet(audio_path, model_name):
     with tempfile.TemporaryDirectory(prefix="pure-voice-parakeet-") as temp_dir:
         output_dir = Path(temp_dir)
         result = run_checked(
-            [cli, absolute_audio_path, "--model", model_id],
+            [
+                cli,
+                absolute_audio_path,
+                "--model", model_id,
+                "--output-dir", str(output_dir),
+                "--output-format", "txt",
+                "--output-template", "transcript",
+            ],
             "Parakeet transcription",
             cwd=temp_dir,
         )
-        text = read_parakeet_transcript(output_dir, result.stdout)
+        transcript_file = output_dir / "transcript.txt"
+        text = text_from_transcript_file(transcript_file) if transcript_file.exists() else ""
         if not text:
-            raise RuntimeError("Parakeet finished without a readable transcript.")
+            text = read_parakeet_transcript(output_dir, result.stdout)
+        if not text:
+            diagnostics = parakeet_output_diagnostics(output_dir, result.stdout, result.stderr)
+            raise RuntimeError(f"Parakeet finished without a readable transcript ({diagnostics}).")
         return text.strip(), model_id
 
 

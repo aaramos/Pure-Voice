@@ -28,7 +28,7 @@ swift test
 ./script/build_dmg.sh
 ```
 
-The DMG is created at `dist/PureVoice-1.1.2.dmg`.
+The DMG is created at `dist/PureVoice-1.1.3.dmg`.
 
 ## Backlog
 
