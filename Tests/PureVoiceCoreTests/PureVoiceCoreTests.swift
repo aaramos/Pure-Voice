@@ -494,6 +494,27 @@ final class PureVoiceCoreTests: XCTestCase {
         ))
     }
 
+    func testModifierOnlyHotkeyStartsOnlyFromModifierChanges() {
+        let binding = HotkeyBinding.defaultPushToRecord
+
+        XCTAssertTrue(HotkeyService.modifierFlagsMatch(
+            bindingModifierFlags: binding.modifierFlags,
+            eventModifierFlags: .maskCommand
+        ))
+        XCTAssertTrue(HotkeyService.isActivationEvent(for: binding, eventType: .flagsChanged))
+        XCTAssertFalse(HotkeyService.isActivationEvent(for: binding, eventType: .keyDown))
+    }
+
+    func testKeyChordHotkeyCanStartFromKeyDown() {
+        let binding = HotkeyBinding(
+            keyCode: HotkeyKeyCode.space,
+            modifierFlags: CGEventFlags.maskCommand.rawValue
+        )
+
+        XCTAssertTrue(HotkeyService.isActivationEvent(for: binding, eventType: .keyDown))
+        XCTAssertFalse(HotkeyService.isActivationEvent(for: binding, eventType: .flagsChanged))
+    }
+
     func testHotkeyConflictDetectorWarnsButAllowsReservedShortcuts() {
         let commandSpace = HotkeyBinding(
             keyCode: HotkeyKeyCode.space,

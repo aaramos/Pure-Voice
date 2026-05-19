@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.5 - 2026-05-19
+
+- Fixed Push to Talk restarting after Pure Voice pasted polished text.
+- Restricted modifier-only shortcut activation to real modifier-change events so synthetic Command-V paste events cannot trigger a new recording.
+- Added regression coverage for modifier-only hotkeys versus key chord hotkeys.
+
 ## v1.1.4 - 2026-05-19
 
 - Fixed Push to Talk and Push to Record start shortcuts when existing local settings still had legacy Command-Option bindings.

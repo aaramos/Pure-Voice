@@ -352,9 +352,12 @@ public final class HotkeyService: @unchecked Sendable {
         let matchedActions = Set(bindings.compactMap { action, binding in
             matches(binding, modifiers: modifiers) ? action : nil
         })
+        let activatingActions = Set(bindings.compactMap { action, binding in
+            Self.isActivationEvent(for: binding, eventType: type) && matches(binding, modifiers: modifiers) ? action : nil
+        })
 
         if type == .keyDown || type == .flagsChanged || Self.isMouseDown(type) {
-            for action in matchedActions where !activeActions.contains(action) {
+            for action in activatingActions where !activeActions.contains(action) {
                 activeActions.insert(action)
                 handler?(action, .keyDown)
             }
@@ -414,6 +417,23 @@ public final class HotkeyService: @unchecked Sendable {
         }
 
         return binding.modifierFlags != 0 || !requiredKeyCodes.isEmpty || !requiredMouseButtons.isEmpty
+    }
+
+    static func isActivationEvent(for binding: HotkeyBinding, eventType type: CGEventType) -> Bool {
+        let hasRequiredKeys = !binding.keyCodes.isEmpty
+        let hasRequiredMouseButtons = !binding.mouseButtons.isEmpty
+
+        if hasRequiredKeys || hasRequiredMouseButtons {
+            if type == .keyDown, hasRequiredKeys {
+                return true
+            }
+            if isMouseDown(type), hasRequiredMouseButtons {
+                return true
+            }
+            return false
+        }
+
+        return binding.modifierFlags != 0 && type == .flagsChanged
     }
 
     static func modifierFlagsMatch(bindingModifierFlags: UInt64, eventModifierFlags: CGEventFlags) -> Bool {
