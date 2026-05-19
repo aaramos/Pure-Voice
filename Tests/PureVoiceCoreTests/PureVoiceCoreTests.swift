@@ -368,11 +368,69 @@ final class PureVoiceCoreTests: XCTestCase {
         XCTAssertEqual(health.model, "base.en")
     }
 
+    func testSTTHelperReportsEmptyTranscriptForSilentRecording() async throws {
+        let helperURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pure-voice-empty-helper-\(UUID().uuidString).py")
+        let audioURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pure-voice-empty-audio-\(UUID().uuidString).wav")
+        defer {
+            try? FileManager.default.removeItem(at: helperURL)
+            try? FileManager.default.removeItem(at: audioURL)
+        }
+
+        let script = """
+        import json
+
+        print(json.dumps({
+            "engine": "whisper",
+            "model": "stub",
+            "raw_text": "   ",
+            "latency_ms": 4,
+            "status": "ok",
+            "error_message": None
+        }))
+        """
+        try script.write(to: helperURL, atomically: true, encoding: .utf8)
+        try Data().write(to: audioURL)
+
+        let client = STTHelperClient(helperURL: helperURL)
+        do {
+            _ = try await client.transcribe(audioURL: audioURL, engine: .whisper, model: nil)
+            XCTFail("Expected empty transcript to throw")
+        } catch let error as STTHelperError {
+            XCTAssertEqual(error, .emptyTranscript)
+        }
+    }
+
     func testDefaultHotkeyBindingsAreSideSpecific() {
         XCTAssertEqual(HotkeyBinding.defaultPushToRecord.displayString, "right ⌘")
         XCTAssertEqual(HotkeyBinding.defaultPushToRecordStop.displayString, "right ⌘ + right ⌥")
         XCTAssertEqual(HotkeyBinding.defaultPushToTalk.displayString, HotkeyBinding.defaultPushToRecord.displayString)
         XCTAssertNil(HotkeyBinding.defaultBindings[.pushToTalk])
+    }
+
+    func testMigratesHybridLegacyStartShortcutToRightCommandOnly() {
+        let legacyStart = HotkeyBinding(
+            modifierFlags: HotkeyBinding.defaultPushToRecord.modifierFlags | CGEventFlags.maskAlternate.rawValue
+        )
+
+        XCTAssertEqual(legacyStart.displayString, "right ⌘ + ⌥")
+        XCTAssertEqual(
+            HotkeyBinding.migratedDefaultBinding(legacyStart, for: .pushToRecord),
+            .defaultPushToRecord
+        )
+    }
+
+    func testMigratesLegacyStopShortcutWithSpaceToCurrentStopDefault() {
+        let legacyStop = HotkeyBinding(
+            keyCodes: [HotkeyKeyCode.space],
+            modifierFlags: HotkeyBinding.defaultPushToRecordStop.modifierFlags
+        )
+
+        XCTAssertEqual(
+            HotkeyBinding.migratedDefaultBinding(legacyStop, for: .pushToRecordStop),
+            .defaultPushToRecordStop
+        )
     }
 
     func testHotkeyBindingSupportsMultiKeyAndMouseDisplay() {
@@ -408,6 +466,32 @@ final class PureVoiceCoreTests: XCTestCase {
 
         XCTAssertEqual(modifierOnlyBinding.keyCodes, [])
         XCTAssertEqual(modifierOnlyBinding.mouseButtons, [])
+    }
+
+    func testHotkeyMatcherAcceptsLegacyGenericCommandForRightCommandEvent() {
+        let legacyCommandOnlyBinding = CGEventFlags.maskCommand.rawValue
+        let rightCommandEvent = CGEventFlags(rawValue: HotkeyBinding.defaultPushToRecord.modifierFlags)
+
+        XCTAssertTrue(HotkeyService.modifierFlagsMatch(
+            bindingModifierFlags: legacyCommandOnlyBinding,
+            eventModifierFlags: rightCommandEvent
+        ))
+    }
+
+    func testHotkeyMatcherAcceptsRightCommandBindingWhenEventHasNoSideFlag() {
+        XCTAssertTrue(HotkeyService.modifierFlagsMatch(
+            bindingModifierFlags: HotkeyBinding.defaultPushToRecord.modifierFlags,
+            eventModifierFlags: .maskCommand
+        ))
+    }
+
+    func testHotkeyMatcherRejectsExtraModifierForRightCommandStartShortcut() {
+        let rightCommandOptionEvent = CGEventFlags(rawValue: HotkeyBinding.defaultPushToRecordStop.modifierFlags)
+
+        XCTAssertFalse(HotkeyService.modifierFlagsMatch(
+            bindingModifierFlags: HotkeyBinding.defaultPushToRecord.modifierFlags,
+            eventModifierFlags: rightCommandOptionEvent
+        ))
     }
 
     func testHotkeyConflictDetectorWarnsButAllowsReservedShortcuts() {

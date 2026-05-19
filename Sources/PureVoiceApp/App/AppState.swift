@@ -18,6 +18,7 @@ enum RecordingStatus: Equatable {
     case idle
     case recording
     case processing
+    case noSpeechDetected
     case pastedToField
     case copiedToClipboard
     case copiedRawTranscript
@@ -1021,7 +1022,11 @@ final class AppState: ObservableObject {
             return
         }
         let recordingEngine = activeRecordingSTTEngine ?? selectedSTTEngine
-        defer { activeRecordingSTTEngine = nil }
+        defer {
+            activeRecordingSTTEngine = nil
+            activeAudioURL = nil
+            originalTarget = nil
+        }
 
         let overallStart = Date()
         stage = .transcribing
@@ -1090,7 +1095,9 @@ final class AppState: ObservableObject {
             try? FileManager.default.removeItem(at: audioURL)
         } catch {
             pipelineLogger.error("Pipeline failed: \(error.localizedDescription, privacy: .public)")
-            if let fallbackSTTResult {
+            if Self.isNoSpeechDetected(error) {
+                finishNoSpeechRecording(audioURL: audioURL)
+            } else if let fallbackSTTResult {
                 deliverRawTranscriptFallback(
                     fallbackSTTResult,
                     audioURL: audioURL,
@@ -1158,6 +1165,10 @@ final class AppState: ObservableObject {
                 model: nil
             )
         } catch {
+            guard !Self.isNoSpeechDetected(error) else {
+                throw error
+            }
+
             guard preferredEngine == .parakeet else {
                 throw error
             }
@@ -1179,6 +1190,28 @@ final class AppState: ObservableObject {
             pipelineLogger.info("Whisper fallback transcription succeeded, chars=\(fallback.rawText.count, privacy: .public)")
             return fallback
         }
+    }
+
+    private func finishNoSpeechRecording(audioURL: URL) {
+        errorMessage = nil
+        transcriptPreview = ""
+        polishedPreview = ""
+        lastPasteStatus = nil
+        lastPasteFallbackReason = nil
+        stage = .idle
+        resetPushToTalkState()
+        recordingStatus = .noSpeechDetected
+        pipelineLogger.info("Pipeline ended without detected speech; returning to idle without error.")
+        try? FileManager.default.removeItem(at: audioURL)
+    }
+
+    private static func isNoSpeechDetected(_ error: Error) -> Bool {
+        if let sttError = error as? STTHelperError, sttError == .emptyTranscript {
+            return true
+        }
+
+        return error.localizedDescription
+            .localizedCaseInsensitiveContains("No speech was detected")
     }
 
     private func saveTranscriptRecord(_ record: TranscriptRecord) {
@@ -1248,13 +1281,17 @@ final class AppState: ObservableObject {
     private func failMessage(_ message: String) {
         errorMessage = message
         stage = .error
+        resetPushToTalkState()
+        if recordingStatus != .modelUnavailable {
+            recordingStatus = .idle
+        }
+    }
+
+    private func resetPushToTalkState() {
         pushToTalkKeyDown = false
         pushToTalkStartedRecording = false
         pushToTalkStartTask?.cancel()
         pushToTalkStartTask = nil
-        if recordingStatus != .modelUnavailable {
-            recordingStatus = .idle
-        }
     }
 
     private func readStringConfig(_ key: String) -> String? {
@@ -1283,7 +1320,11 @@ final class AppState: ObservableObject {
         var bindings = HotkeyBinding.defaultBindings
         for action in configurableHotkeyActions {
             if let binding = readHotkeyBindingConfig(action) {
-                bindings[action] = migratedHotkeyBinding(binding, for: action)
+                let migratedBinding = HotkeyBinding.migratedDefaultBinding(binding, for: action)
+                bindings[action] = migratedBinding
+                if migratedBinding != binding {
+                    saveHotkeyBindingConfig(migratedBinding, for: action)
+                }
             }
         }
         return bindings
@@ -1291,17 +1332,6 @@ final class AppState: ObservableObject {
 
     private var configurableHotkeyActions: [HotkeyAction] {
         [.pushToRecord, .pushToRecordStop]
-    }
-
-    private func migratedHotkeyBinding(_ binding: HotkeyBinding, for action: HotkeyAction) -> HotkeyBinding {
-        switch (action, binding.displayString) {
-        case (.pushToRecord, "right ⌘ + right ⌥"):
-            return .defaultPushToRecord
-        case (.pushToRecordStop, "right ⌘ + right ⌥ + Space"):
-            return .defaultPushToRecordStop
-        default:
-            return binding
-        }
     }
 
     private func readHotkeyBindingConfig(_ action: HotkeyAction) -> HotkeyBinding? {
@@ -1485,11 +1515,11 @@ final class AppState: ObservableObject {
         switch newStatus {
         case .idle:
             recordingStatusPanel?.orderOut(nil)
-        case .recording, .processing, .retrying, .modelUnavailable, .pastedToField, .copiedToClipboard, .copiedRawTranscript:
+        case .recording, .processing, .retrying, .modelUnavailable, .noSpeechDetected, .pastedToField, .copiedToClipboard, .copiedRawTranscript:
             showRecordingStatusPanelIfNeeded(allowsUserDismissal: newStatus == .modelUnavailable)
             recordingStatusPanel?.reposition()
 
-            if newStatus == .pastedToField || newStatus == .copiedToClipboard || newStatus == .copiedRawTranscript {
+            if newStatus == .pastedToField || newStatus == .copiedToClipboard || newStatus == .copiedRawTranscript || newStatus == .noSpeechDetected {
                 recordingStatusDismissTask = Task { [weak self] in
                     try? await Task.sleep(for: .seconds(2))
                     await MainActor.run {

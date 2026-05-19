@@ -62,9 +62,34 @@ public extension HotkeyBinding {
         .pushToRecordStop: .defaultPushToRecordStop
     ]
 
+    static func migratedDefaultBinding(_ binding: HotkeyBinding, for action: HotkeyAction) -> HotkeyBinding {
+        switch action {
+        case .pushToRecord where legacyStartShortcutDisplays.contains(binding.displayString):
+            return .defaultPushToRecord
+        case .pushToRecordStop where legacyStopShortcutDisplays.contains(binding.displayString):
+            return .defaultPushToRecordStop
+        default:
+            return binding
+        }
+    }
+
     var displayString: String {
         HotkeyFormatter.string(for: self)
     }
+
+    private static let legacyStartShortcutDisplays: Set<String> = [
+        "right ⌘ + right ⌥",
+        "right ⌘ + ⌥",
+        "⌘ + right ⌥",
+        "⌘ + ⌥"
+    ]
+
+    private static let legacyStopShortcutDisplays: Set<String> = [
+        "right ⌘ + right ⌥ + Space",
+        "right ⌘ + ⌥ + Space",
+        "⌘ + right ⌥ + Space",
+        "⌘ + ⌥ + Space"
+    ]
 }
 
 public final class HotkeyService: @unchecked Sendable {
@@ -374,7 +399,10 @@ public final class HotkeyService: @unchecked Sendable {
     }
 
     private func matches(_ binding: HotkeyBinding, modifiers: CGEventFlags) -> Bool {
-        guard binding.modifierFlags == modifiers.rawValue else {
+        guard Self.modifierFlagsMatch(
+            bindingModifierFlags: binding.modifierFlags,
+            eventModifierFlags: modifiers
+        ) else {
             return false
         }
 
@@ -386,6 +414,79 @@ public final class HotkeyService: @unchecked Sendable {
         }
 
         return binding.modifierFlags != 0 || !requiredKeyCodes.isEmpty || !requiredMouseButtons.isEmpty
+    }
+
+    static func modifierFlagsMatch(bindingModifierFlags: UInt64, eventModifierFlags: CGEventFlags) -> Bool {
+        let binding = CGEventFlags(rawValue: bindingModifierFlags)
+
+        guard sideAwareModifierMatches(
+            binding: binding,
+            event: eventModifierFlags,
+            generic: .maskShift,
+            left: .pureVoiceLeftShift,
+            right: .pureVoiceRightShift
+        ) else { return false }
+
+        guard sideAwareModifierMatches(
+            binding: binding,
+            event: eventModifierFlags,
+            generic: .maskControl,
+            left: .pureVoiceLeftControl,
+            right: .pureVoiceRightControl
+        ) else { return false }
+
+        guard sideAwareModifierMatches(
+            binding: binding,
+            event: eventModifierFlags,
+            generic: .maskAlternate,
+            left: .pureVoiceLeftAlternate,
+            right: .pureVoiceRightAlternate
+        ) else { return false }
+
+        guard sideAwareModifierMatches(
+            binding: binding,
+            event: eventModifierFlags,
+            generic: .maskCommand,
+            left: .pureVoiceLeftCommand,
+            right: .pureVoiceRightCommand
+        ) else { return false }
+
+        return binding.contains(.maskSecondaryFn) == eventModifierFlags.contains(.maskSecondaryFn)
+    }
+
+    private static func sideAwareModifierMatches(
+        binding: CGEventFlags,
+        event: CGEventFlags,
+        generic: CGEventFlags,
+        left: CGEventFlags,
+        right: CGEventFlags
+    ) -> Bool {
+        let bindingHasGeneric = binding.contains(generic)
+        let bindingHasLeft = binding.contains(left)
+        let bindingHasRight = binding.contains(right)
+        let eventHasGeneric = event.contains(generic)
+        let eventHasLeft = event.contains(left)
+        let eventHasRight = event.contains(right)
+
+        let bindingUsesFamily = bindingHasGeneric || bindingHasLeft || bindingHasRight
+        let eventUsesFamily = eventHasGeneric || eventHasLeft || eventHasRight
+        guard bindingUsesFamily == eventUsesFamily else {
+            return false
+        }
+
+        guard bindingUsesFamily else {
+            return true
+        }
+
+        guard bindingHasLeft || bindingHasRight else {
+            return true
+        }
+
+        guard eventHasLeft || eventHasRight else {
+            return true
+        }
+
+        return bindingHasLeft == eventHasLeft && bindingHasRight == eventHasRight
     }
 
     private static func normalizedModifiers(from event: CGEvent) -> CGEventFlags {

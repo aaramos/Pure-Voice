@@ -74,6 +74,8 @@ struct StatusModalView: View {
                 .controlSize(.small)
                 .tint(pillForeground)
                 .frame(width: 14, height: 14)
+        case .noSpeechDetected:
+            Image(systemName: "mic.slash.fill")
         case .pastedToField:
             Image(systemName: "checkmark.circle.fill")
         case .copiedToClipboard, .copiedRawTranscript:
@@ -95,6 +97,8 @@ struct StatusModalView: View {
             return "Recording — \(state.recordingInstructionText)"
         case .processing:
             return "Transcribing & refining…"
+        case .noSpeechDetected:
+            return "No speech detected"
         case .pastedToField:
             return "Pasted into field"
         case .copiedToClipboard:
@@ -110,6 +114,8 @@ struct StatusModalView: View {
 
     private var subLabel: String? {
         switch state.recordingStatus {
+        case .noSpeechDetected:
+            return "Nothing was pasted; dismisses in 2s"
         case .pastedToField, .copiedToClipboard:
             return "Dismisses in 2s"
         case .copiedRawTranscript:
@@ -129,6 +135,8 @@ struct StatusModalView: View {
             return colorScheme == .dark ? Color(hex: 0x7C3AED).opacity(0.28) : Color(hex: 0xF5F3FF)
         case .processing:
             return colorScheme == .dark ? Color(hex: 0xF59E0B).opacity(0.24) : Color(hex: 0xFFFBEB)
+        case .noSpeechDetected:
+            return colorScheme == .dark ? Color(hex: 0x64748B).opacity(0.24) : Color(hex: 0xF1F5F9)
         case .pastedToField:
             return colorScheme == .dark ? Color(hex: 0x65A30D).opacity(0.24) : Color(hex: 0xF0FDF4)
         case .copiedToClipboard, .copiedRawTranscript:
@@ -146,6 +154,8 @@ struct StatusModalView: View {
             return colorScheme == .dark ? Color(hex: 0xC4B8FF) : Color(hex: 0x5B21B6)
         case .processing:
             return colorScheme == .dark ? Color(hex: 0xFAC775) : Color(hex: 0x92400E)
+        case .noSpeechDetected:
+            return colorScheme == .dark ? Color(hex: 0xCBD5E1) : Color(hex: 0x475569)
         case .pastedToField:
             return colorScheme == .dark ? Color(hex: 0x97C459) : Color(hex: 0x166534)
         case .copiedToClipboard, .copiedRawTranscript:

@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.4 - 2026-05-19
+
+- Fixed Push to Talk and Push to Record start shortcuts when existing local settings still had legacy Command-Option bindings.
+- Persisted migrated hotkey defaults so Right Command remains the Start shortcut after restart.
+- Treated silent recordings as a graceful no-output stop instead of a Needs Attention error.
+- Added regression coverage for hotkey migration, modifier matching, and empty transcript handling.
+
 ## v1.1.0 - 2026-05-19
 
 - Added first-launch onboarding with permission checks, guided speech-to-text engine choice, and a shared install screen.
