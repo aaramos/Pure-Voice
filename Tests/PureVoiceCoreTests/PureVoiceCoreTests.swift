@@ -7,24 +7,20 @@ import XCTest
 final class PureVoiceCoreTests: XCTestCase {
     func testPersonaDefaultsIncludeRequiredPersonas() {
         let names = PersonaDefaults.defaultPersonas.map(\.name)
-        XCTAssertEqual(names, ["Polish", "Clarity", "Concise", "Proofread", "Rewrite", "Ultra Concise"])
+        XCTAssertEqual(names, ["Polish", "Brief", "Rewrite", "Caveman"])
         XCTAssertEqual(PersonaDefaults.defaultPersonas.filter(\.isDefault).map(\.name), ["Polish"])
         XCTAssertEqual(PersonaDefaults.defaultPersonas.first(where: \.isDefault)?.id, PersonaDefaults.defaultPersonaID)
         XCTAssertTrue(PersonaDefaults.defaultPersonas.allSatisfy {
-            $0.systemPrompt.contains("Do not answer")
+            $0.systemPrompt.contains("Return only")
         })
         XCTAssertFalse(PersonaDefaults.defaultPersonas.contains {
             $0.systemPrompt.contains(PersonaStore.sharedGuardrail)
         })
         XCTAssertTrue(PersonaStore.promptWithGuardrail("Edit this.").contains(PersonaStore.sharedGuardrail))
-        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Polish" }?.systemPrompt.contains("Proofread and lightly shorten") == true)
-        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Polish" }?.systemPrompt.contains("do not compress it aggressively") == true)
-        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Rewrite" }?.systemPrompt.contains("clean, natural voice") == true)
-        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Proofread" }?.systemPrompt.contains("Keep the original wording") == true)
-        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Concise" }?.systemPrompt.contains("Remove filler") == true)
-        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Clarity" }?.systemPrompt.contains("Prioritize understanding over brevity") == true)
-        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Proofread" }?.systemPrompt.contains("Make the smallest useful edit") == true)
-        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Ultra Concise" }?.systemPrompt.contains("one quarter of the original length") == true)
+        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Polish" }?.systemPrompt.contains("active voice throughout") == true)
+        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Brief" }?.systemPrompt.contains("roughly half its original length") == true)
+        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Rewrite" }?.systemPrompt.contains("minimum useful change") == true)
+        XCTAssertTrue(PersonaDefaults.defaultPersonas.first { $0.name == "Caveman" }?.systemPrompt.contains("minimum words needed") == true)
     }
 
     func testSQLiteSeedsPersonasAndPersistsConfigAndTranscript() throws {
@@ -34,12 +30,12 @@ final class PureVoiceCoreTests: XCTestCase {
 
         let store = try SQLiteStore(databaseURL: url)
         let personas = try store.loadPersonas()
-        XCTAssertEqual(personas.count, 6)
+        XCTAssertEqual(personas.count, 4)
         XCTAssertEqual(personas.filter(\.isDefault).map(\.name), ["Polish"])
-        XCTAssertEqual(Set(personas.map(\.name)), Set(["Polish", "Rewrite", "Proofread", "Concise", "Clarity", "Ultra Concise"]))
+        XCTAssertEqual(Set(personas.map(\.name)), Set(["Polish", "Brief", "Rewrite", "Caveman"]))
         XCTAssertFalse(personas.contains { $0.systemPrompt.contains(PersonaStore.sharedGuardrail) })
         XCTAssertTrue(personas.allSatisfy {
-            $0.systemPrompt.contains("Do not answer")
+            $0.systemPrompt.contains("Return only")
         })
 
         try store.saveConfig(key: "active_persona_id", valueJSON: "\"polish\"")
@@ -96,16 +92,14 @@ final class PureVoiceCoreTests: XCTestCase {
         let personas = try store.loadPersonas()
 
         XCTAssertTrue(personas.contains { $0.name == "Polish" })
+        XCTAssertTrue(personas.contains { $0.name == "Brief" })
         XCTAssertTrue(personas.contains { $0.name == "Rewrite" })
-        XCTAssertTrue(personas.contains { $0.name == "Proofread" })
-        XCTAssertTrue(personas.contains { $0.name == "Concise" })
-        XCTAssertTrue(personas.contains { $0.name == "Clarity" })
-        XCTAssertTrue(personas.contains { $0.name == "Ultra Concise" })
+        XCTAssertTrue(personas.contains { $0.name == "Caveman" })
         XCTAssertFalse(personas.contains { $0.name == "Default" })
         XCTAssertEqual(personas.filter(\.isDefault).map(\.name), ["Polish"])
         XCTAssertFalse(personas.contains { $0.systemPrompt.contains(PersonaStore.sharedGuardrail) })
         XCTAssertTrue(personas.allSatisfy {
-            $0.systemPrompt.contains("Do not answer")
+            $0.systemPrompt.contains("Return only")
         })
     }
 
@@ -139,7 +133,7 @@ final class PureVoiceCoreTests: XCTestCase {
             updated_at TEXT NOT NULL
         );
         INSERT INTO personas VALUES ('clarity', 'Clarity', '\(escapedPrompt)', 1, 1, '\(now)', '\(now)');
-        INSERT INTO personas VALUES ('ultra-concise', 'Ultra Concise', '\(escapedPrompt)', 1, 0, '\(now)', '\(now)');
+        INSERT INTO personas VALUES ('rewrite', 'Rewrite', '\(escapedPrompt)', 1, 0, '\(now)', '\(now)');
         """
         XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK)
         if let db {
@@ -150,9 +144,10 @@ final class PureVoiceCoreTests: XCTestCase {
         let store = try SQLiteStore(databaseURL: url)
         let personas = try store.loadPersonas()
 
+        XCTAssertFalse(personas.contains { $0.name == "Clarity" })
         XCTAssertEqual(
-            personas.first { $0.name == "Clarity" }?.systemPrompt,
-            PersonaDefaults.defaultPersonas.first { $0.name == "Clarity" }?.systemPrompt
+            Set(personas.map(\.name)),
+            Set(["Polish", "Brief", "Rewrite", "Caveman"])
         )
         XCTAssertEqual(
             personas.first { $0.name == "Rewrite" }?.systemPrompt,
@@ -163,7 +158,7 @@ final class PureVoiceCoreTests: XCTestCase {
             PersonaDefaults.defaultPersonas.first { $0.name == "Polish" }?.systemPrompt
         )
         XCTAssertTrue(personas.allSatisfy {
-            $0.systemPrompt.contains("Do not answer")
+            $0.systemPrompt.contains("Return only")
         })
     }
 
@@ -302,26 +297,26 @@ final class PureVoiceCoreTests: XCTestCase {
         """
         let client = AppleFoundationModelClient()
         let polishPrompt = try XCTUnwrap(PersonaDefaults.defaultPersonas.first { $0.name == "Polish" }?.systemPrompt)
-        let concisePrompt = try XCTUnwrap(PersonaDefaults.defaultPersonas.first { $0.name == "Concise" }?.systemPrompt)
+        let briefPrompt = try XCTUnwrap(PersonaDefaults.defaultPersonas.first { $0.name == "Brief" }?.systemPrompt)
 
         let polish = try await client.polish(text: transcript, systemPrompt: polishPrompt)
-        let concise = try await client.polish(text: transcript, systemPrompt: concisePrompt)
+        let brief = try await client.polish(text: transcript, systemPrompt: briefPrompt)
 
         print("PUREVOICE_LIVE_POLISH=\(polish)")
-        print("PUREVOICE_LIVE_CONCISE=\(concise)")
+        print("PUREVOICE_LIVE_BRIEF=\(brief)")
 
         XCTAssertNotEqual(normalizedForComparison(polish), normalizedForComparison(transcript))
-        XCTAssertNotEqual(normalizedForComparison(concise), normalizedForComparison(polish))
+        XCTAssertNotEqual(normalizedForComparison(brief), normalizedForComparison(polish))
         XCTAssertLessThan(wordCount(polish), wordCount(transcript))
-        XCTAssertLessThan(wordCount(concise), wordCount(polish))
+        XCTAssertLessThan(wordCount(brief), wordCount(polish))
         XCTAssertFalse(normalizedForComparison(polish).contains("here's"))
         XCTAssertFalse(normalizedForComparison(polish).contains("polished version"))
-        XCTAssertFalse(normalizedForComparison(concise).contains("here's"))
-        XCTAssertFalse(normalizedForComparison(concise).contains("polished version"))
+        XCTAssertFalse(normalizedForComparison(brief).contains("here's"))
+        XCTAssertFalse(normalizedForComparison(brief).contains("polished version"))
         XCTAssertTrue(polish.localizedCaseInsensitiveContains("Jordan"))
-        XCTAssertTrue(concise.localizedCaseInsensitiveContains("Jordan"))
+        XCTAssertTrue(brief.localizedCaseInsensitiveContains("Jordan"))
         XCTAssertTrue(polish.localizedCaseInsensitiveContains("Friday"))
-        XCTAssertTrue(concise.localizedCaseInsensitiveContains("Friday"))
+        XCTAssertTrue(brief.localizedCaseInsensitiveContains("Friday"))
     }
 
     func testSTTResultDecodesHelperShape() throws {
