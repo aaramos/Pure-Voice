@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.6 - 2026-05-19
+
+- Strengthened polishing instructions so question-like dictation is edited as copy, not answered as a chat prompt.
+- Added explicit guardrails to keep questions as questions and prevent the model from role-playing or referring to itself.
+- Added regression coverage for prompts such as "what model are you."
+
 ## v1.1.5 - 2026-05-19
 
 - Fixed Push to Talk restarting after Pure Voice pasted polished text.

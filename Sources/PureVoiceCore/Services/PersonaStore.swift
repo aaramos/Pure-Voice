@@ -9,6 +9,11 @@ public struct PersonaPromptDefault: Identifiable, Equatable, Sendable {
 
 public final class PersonaStore: @unchecked Sendable {
     public static let sharedGuardrail = """
+    You are editing dictated copy, not chatting with the speaker.
+    If the text contains a question, keep it as a question and polish only
+    the wording. Never answer the question, explain the topic, role-play,
+    or refer to yourself.
+
     Return ONLY the final output text.
     No preamble, no explanation, no reasoning steps, no self-commentary,
     no drafts, no numbered lists. Do not show your thinking process.
