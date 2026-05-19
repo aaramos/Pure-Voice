@@ -4,6 +4,11 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var state: AppState
     @State private var selectedTab: SettingsTab = .general
+    @State private var pendingSTTInstallEngine: STTEngine?
+    @State private var activeSTTInstallEngine: STTEngine?
+    @State private var sttInstallFeedback: STTInstallFeedback?
+    @State private var sttToastMessage: String?
+    @State private var sttToastDismissTask: Task<Void, Never>?
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -27,6 +32,17 @@ struct SettingsView: View {
         .onChange(of: selectedTab) { _, newValue in
             if newValue == .preview {
                 state.refreshStalePersonaPreviewIfNeeded()
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let sttToastMessage {
+                Text(sttToastMessage)
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .shadow(radius: 12, y: 4)
+                    .padding(.bottom, 4)
             }
         }
     }
@@ -230,27 +246,16 @@ struct SettingsView: View {
     private var sttSection: some View {
         GroupBox("Speech To Text") {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    Text("Engine")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 70, alignment: .leading)
-
-                    ForEach(STTEngine.allCases) { engine in
-                        Button {
-                            Task { await state.selectSTTEngine(engine) }
-                        } label: {
-                            Label(
-                                engine.displayName,
-                                systemImage: state.selectedSTTEngine == engine ? "largecircle.fill.circle" : "circle"
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(state.sttInstallInProgress)
+                if let activeSTTInstallEngine {
+                    STTInstallView(engine: activeSTTInstallEngine) { result in
+                        handleSettingsInstallCompletion(result, engine: activeSTTInstallEngine)
                     }
+                    .frame(height: 280)
+                } else if let pendingSTTInstallEngine {
+                    sttInstallConfirmationPanel(for: pendingSTTInstallEngine)
+                } else {
+                    sttEngineChoices
                 }
-
-                healthRow("Whisper", health: state.whisperHealth)
-                healthRow("Parakeet", health: state.parakeetHealth)
 
                 if let notice = state.sttNotice {
                     Label(notice, systemImage: "info.circle")
@@ -258,8 +263,13 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                if activeSTTInstallEngine == nil, pendingSTTInstallEngine == nil {
+                    sttInstallFeedbackView
+                    sttTechnicalDetailsDisclosure
+                }
+
                 HStack {
-                    if state.sttInstallInProgress {
+                    if state.sttInstallInProgress, activeSTTInstallEngine == nil {
                         ProgressView()
                             .controlSize(.small)
                         Text(state.sttInstallStatus ?? "Installing...")
@@ -272,24 +282,201 @@ struct SettingsView: View {
                         Task { await state.refreshSTTHealth() }
                     }
                     .disabled(state.sttInstallInProgress)
-
-                    if selectedEngineNeedsInstall {
-                        Button("Install \(state.selectedSTTEngine.displayName)") {
-                            Task { await state.installSTTDependencies(engine: state.selectedSTTEngine) }
-                        }
-                        .disabled(state.sttInstallInProgress)
-                    }
                 }
             }
         }
     }
 
-    private var selectedEngineNeedsInstall: Bool {
-        switch state.selectedSTTEngine {
+    private var sttEngineChoices: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Engine")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(STTEngine.allCases) { engine in
+                sttEngineChoiceRow(for: engine)
+            }
+        }
+    }
+
+    private func sttEngineChoiceRow(for engine: STTEngine) -> some View {
+        let health = state.sttHealth(for: engine)
+        let isSelected = state.selectedSTTEngine == engine
+        let status = sttStatus(for: health)
+
+        return Button {
+            chooseSTTEngine(engine)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .frame(width: 18)
+
+                Text(engine.displayName)
+                    .font(.callout.weight(.semibold))
+
+                switch status {
+                case .available:
+                    if !isSelected {
+                        Text("available")
+                            .foregroundStyle(.secondary)
+                    }
+                case .notInstalled:
+                    Text("not installed")
+                        .foregroundStyle(.secondary)
+                    Text("Install")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                case .attention(let message):
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(message)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(state.sttInstallInProgress)
+    }
+
+    private func sttInstallConfirmationPanel(for engine: STTEngine) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Install \(engine.displayName)?")
+                .font(.headline)
+
+            Text("\(engine.displayName) isn't installed yet. Pure Voice needs to download \(installSize(for: engine)). Installation takes \(installTime(for: engine)) on a typical connection.")
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("\(state.selectedSTTEngine.displayName) will remain your transcription engine if you cancel.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    pendingSTTInstallEngine = nil
+                }
+                Button("Install \(engine.displayName)") {
+                    sttInstallFeedback = nil
+                    activeSTTInstallEngine = engine
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(14)
+        .background(.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private var sttInstallFeedbackView: some View {
+        if let sttInstallFeedback {
+            HStack(spacing: 6) {
+                Text(sttInstallFeedback.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button("Try again") {
+                    pendingSTTInstallEngine = sttInstallFeedback.engine
+                    self.sttInstallFeedback = nil
+                }
+                .font(.caption)
+                .buttonStyle(.link)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var sttTechnicalDetailsDisclosure: some View {
+        if shouldShowSTTTechnicalDetails {
+            DisclosureGroup("Technical details") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Whisper: \(state.whisperHealth.message)")
+                    Text("Parakeet: \(state.parakeetHealth.message)")
+                }
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(.caption)
+        }
+    }
+
+    private var shouldShowSTTTechnicalDetails: Bool {
+        [state.whisperHealth, state.parakeetHealth].contains { health in
+            !health.available && state.displaySTTHealthMessage(for: health) != health.message
+        }
+    }
+
+    private func chooseSTTEngine(_ engine: STTEngine) {
+        sttInstallFeedback = nil
+        guard state.selectedSTTEngine != engine || !state.sttEngineIsAvailable(engine) else { return }
+
+        if state.sttEngineIsAvailable(engine) {
+            pendingSTTInstallEngine = nil
+            state.selectInstalledSTTEngineFromInstallFlow(engine)
+        } else {
+            pendingSTTInstallEngine = engine
+        }
+    }
+
+    private func handleSettingsInstallCompletion(_ result: Result<Void, Error>, engine: STTEngine) {
+        activeSTTInstallEngine = nil
+        pendingSTTInstallEngine = nil
+
+        switch result {
+        case .success:
+            state.selectInstalledSTTEngineFromInstallFlow(engine)
+            sttInstallFeedback = nil
+            showSTTToast("\(engine.displayName) is now your transcription engine.")
+        case .failure:
+            state.selectInstalledSTTEngineFromInstallFlow(.whisper)
+            sttInstallFeedback = .failed(engine)
+        }
+    }
+
+    private func showSTTToast(_ message: String) {
+        sttToastDismissTask?.cancel()
+        sttToastMessage = message
+        sttToastDismissTask = Task {
+            try? await Task.sleep(for: .seconds(4))
+            await MainActor.run {
+                sttToastMessage = nil
+            }
+        }
+    }
+
+    private func sttStatus(for health: STTHealth) -> STTStatus {
+        if health.available {
+            return .available
+        }
+
+        let message = state.displaySTTHealthMessage(for: health)
+        if message == "Not installed" || message == "Not checked" {
+            return .notInstalled
+        }
+        return .attention(message)
+    }
+
+    private func installSize(for engine: STTEngine) -> String {
+        switch engine {
         case .whisper:
-            return !state.whisperHealth.available
+            InstallEstimates.whisperSize
         case .parakeet:
-            return !state.parakeetHealth.available
+            InstallEstimates.parakeetSize
+        }
+    }
+
+    private func installTime(for engine: STTEngine) -> String {
+        switch engine {
+        case .whisper:
+            InstallEstimates.whisperTime
+        case .parakeet:
+            InstallEstimates.parakeetTime
         }
     }
 
@@ -495,4 +682,31 @@ private enum SettingsTab: Hashable {
     case recording
     case advanced
     case preview
+}
+
+private enum STTStatus {
+    case available
+    case notInstalled
+    case attention(String)
+}
+
+private enum STTInstallFeedback: Equatable {
+    case canceled(STTEngine)
+    case failed(STTEngine)
+
+    var engine: STTEngine {
+        switch self {
+        case .canceled(let engine), .failed(let engine):
+            engine
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .canceled(let engine):
+            "\(engine.displayName) install canceled."
+        case .failed(let engine):
+            "\(engine.displayName) install failed."
+        }
+    }
 }
