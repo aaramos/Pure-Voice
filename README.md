@@ -16,7 +16,7 @@ Pure Voice is a native macOS menu bar app for turning dictated thoughts into pol
    ./script/build_and_run.sh
    ```
 
-2. Follow onboarding to grant microphone access and install the default Whisper transcription engine.
+2. Follow onboarding to grant microphone access, optionally enable live Speech Recognition, and install the default Whisper transcription engine.
 3. Grant Accessibility when prompted if you want Pure Voice to paste into the active app automatically. Without it, Pure Voice copies the result to the clipboard.
 4. Confirm Apple Intelligence is enabled in System Settings for on-device polishing.
 
@@ -28,7 +28,7 @@ swift test
 ./script/build_dmg.sh
 ```
 
-The DMG is created at `dist/PureVoice-1.1.6.dmg`.
+The DMG is created at `dist/PureVoice-1.1.7.dmg`.
 
 ## Backlog
 
@@ -40,6 +40,7 @@ The v1.x backlog lives in [docs/backlog.md](docs/backlog.md).
 - v1.1 includes four personas: Polish, Brief, Rewrite, and Caveman. Polish is the default.
 - Polishing uses Apple Foundation Models and requires macOS 26 with Apple Intelligence available.
 - The default Push to Record gesture is `right Command` to start and `right Command + right Option` to stop. Push to Talk uses a 1.5-second long press of the Start shortcut.
+- The recording panel shows an on-device live transcript preview when macOS Speech Recognition is available.
 - Transcript history is stored locally in SQLite under Application Support.
-- Raw audio is temporary and is deleted after successful transcription.
+- Raw audio is temporary and is deleted after every processing attempt.
 - The current DMG is signed with the local Pure Voice development identity. Developer ID signing and notarization require Apple distribution credentials and are intentionally left as a follow-up.

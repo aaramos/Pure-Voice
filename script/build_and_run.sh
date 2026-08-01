@@ -7,8 +7,8 @@ DISPLAY_NAME="Pure Voice"
 ICON_NAME="PureVoice"
 BUNDLE_ID="com.adrian.purevoice"
 MIN_SYSTEM_VERSION="26.0"
-MARKETING_VERSION="1.1.6"
-BUILD_VERSION="116"
+MARKETING_VERSION="1.1.7"
+BUILD_VERSION="117"
 CONFIGURATION="${CONFIGURATION:-debug}"
 CODE_SIGN_IDENTITY="${PUREVOICE_CODESIGN_IDENTITY:-Pure Voice Local Development}"
 CODE_SIGN_KEYCHAIN="${PUREVOICE_CODESIGN_KEYCHAIN:-$HOME/Library/Application Support/Pure Voice/Signing/PureVoice.keychain-db}"
@@ -70,6 +70,8 @@ cat >"$INFO_PLIST" <<PLIST
   <string>NSApplication</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Pure Voice records your speech so it can transcribe and polish your dictated text locally.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Pure Voice uses on-device speech recognition to show live text while you are recording.</string>
   <key>NSAppleEventsUsageDescription</key>
   <string>Pure Voice may paste polished text into the application where recording started.</string>
 </dict>

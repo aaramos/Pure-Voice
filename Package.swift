@@ -15,7 +15,9 @@ let package = Package(
         .target(
             name: "PureVoiceCore",
             linkerSettings: [
+                .linkedFramework("AVFoundation"),
                 .linkedFramework("FoundationModels"),
+                .linkedFramework("Speech"),
                 .linkedLibrary("sqlite3")
             ]
         ),
@@ -28,7 +30,9 @@ let package = Package(
             name: "PureVoiceCoreTests",
             dependencies: ["PureVoiceCore"],
             linkerSettings: [
+                .linkedFramework("AVFoundation"),
                 .linkedFramework("FoundationModels"),
+                .linkedFramework("Speech"),
                 .linkedLibrary("sqlite3")
             ]
         )

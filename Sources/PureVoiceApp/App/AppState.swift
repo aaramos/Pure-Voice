@@ -99,6 +99,8 @@ final class AppState: ObservableObject {
     @Published var sttInstallStatus: String?
     @Published var sttNotice: String?
     @Published var transcriptPreview = ""
+    @Published var liveTranscriptPreview = ""
+    @Published var liveTranscriptUnavailableReason: String?
     @Published var polishedPreview = ""
     @Published var errorMessage: String?
     @Published var lastPasteStatus: PasteStatus?
@@ -118,6 +120,7 @@ final class AppState: ObservableObject {
     @Published var waveformLevels: [CGFloat] = Array(repeating: 4, count: 38)
 
     private let audioRecorder = AudioRecorderService()
+    private let liveSpeechPreview = LiveSpeechPreviewService()
     private let appleClient = AppleFoundationModelClient()
     private let releaseClient = GitHubReleaseClient()
     private let updateInstaller = GitHubUpdateInstaller()
@@ -137,6 +140,7 @@ final class AppState: ObservableObject {
     private var onboardingWindow: NSWindow?
     private var onboardingWindowDelegate: OnboardingWindowDelegate?
     private var recordingStatusDismissTask: Task<Void, Never>?
+    private var liveSpeechPreviewStartTask: Task<Void, Never>?
     private var personaPromptSaveTasks: [String: Task<Void, Never>] = [:]
     private var personaPreviewTasks: [String: Task<Void, Never>] = [:]
     private var lastPersonaPreviewInput = ""
@@ -267,6 +271,58 @@ final class AppState: ObservableObject {
         case .pushToTalk:
             return "Release \(hotkeyDisplayText(for: .pushToRecord)) to stop."
         }
+    }
+
+    var statusModalTranscriptText: String {
+        if stage == .recording {
+            if !liveTranscriptPreview.isEmpty {
+                return liveTranscriptPreview
+            }
+            if let liveTranscriptUnavailableReason {
+                return liveTranscriptUnavailableReason
+            }
+            return "Listening..."
+        }
+
+        if !polishedPreview.isEmpty {
+            return polishedPreview
+        }
+
+        if !transcriptPreview.isEmpty {
+            return transcriptPreview
+        }
+
+        switch recordingStatus {
+        case .processing, .retrying:
+            return liveTranscriptPreview.isEmpty ? "Transcribing..." : liveTranscriptPreview
+        case .noSpeechDetected:
+            return "No speech detected"
+        case .pastedToField:
+            return "Pasted into field"
+        case .copiedToClipboard:
+            return "Copied to clipboard"
+        case .copiedRawTranscript:
+            return "Copied raw transcript"
+        case .modelUnavailable:
+            return "Model unavailable"
+        case .idle, .recording:
+            return "Listening..."
+        }
+    }
+
+    var statusModalTranscriptIsPlaceholder: Bool {
+        if stage == .recording {
+            return liveTranscriptPreview.isEmpty
+        }
+        return transcriptPreview.isEmpty && polishedPreview.isEmpty
+    }
+
+    var canStopFromStatusModal: Bool {
+        stage == .recording
+    }
+
+    var canCancelFromStatusModal: Bool {
+        stage == .recording
     }
 
     var attentionGuidance: AttentionGuidance {
@@ -555,6 +611,10 @@ final class AppState: ObservableObject {
         await audioRecorder.requestPermission()
     }
 
+    func requestSpeechRecognitionPermissionForOnboarding() async -> Bool {
+        await liveSpeechPreview.requestPermission()
+    }
+
     func requestAccessibilityPermissionForOnboarding(prompt: Bool) -> Bool {
         pasteService.hasAccessibilityPermission(prompt: prompt)
     }
@@ -565,6 +625,10 @@ final class AppState: ObservableObject {
 
     func openAccessibilityPrivacySettings() {
         openSystemSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+    }
+
+    func openSpeechRecognitionPrivacySettings() {
+        openSystemSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")
     }
 
     func openAppleIntelligenceSettings() {
@@ -928,12 +992,9 @@ final class AppState: ObservableObject {
         pushToTalkStartTask?.cancel()
         pushToTalkStartTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(1500))
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, self.pushToTalkKeyDown else { return }
-                self.pushToTalkStartedRecording = true
-                Task { await self.startRecordingFromHotKey() }
-            }
+            guard let self, !Task.isCancelled, self.pushToTalkKeyDown else { return }
+            self.pushToTalkStartedRecording = true
+            await self.startRecording(requirePushToTalkHeld: true)
         }
     }
 
@@ -985,20 +1046,28 @@ final class AppState: ObservableObject {
         }
     }
 
-    func startRecording() async {
+    func startRecording(requirePushToTalkHeld: Bool = false) async {
         let targetAtGesture = pasteService.captureFocus()
         let micAllowed = await audioRecorder.requestPermission()
         guard micAllowed else {
             fail(AudioRecorderError.microphoneDenied)
             return
         }
+        guard !requirePushToTalkHeld || pushToTalkKeyDown else {
+            return
+        }
 
         guard let recordingEngine = await resolveSTTEngineForRecording() else {
+            return
+        }
+        guard !requirePushToTalkHeld || pushToTalkKeyDown else {
             return
         }
 
         do {
             transcriptPreview = ""
+            liveTranscriptPreview = ""
+            liveTranscriptUnavailableReason = nil
             polishedPreview = ""
             errorMessage = nil
             lastPasteStatus = nil
@@ -1008,6 +1077,7 @@ final class AppState: ObservableObject {
             activeAudioURL = try audioRecorder.startRecording()
             waveformLevels = Array(repeating: 4, count: 38)
             startMeteringTimer()
+            startLiveSpeechPreview()
             stage = .recording
             recordingStatus = .recording
         } catch {
@@ -1017,12 +1087,14 @@ final class AppState: ObservableObject {
 
     func stopAndProcessRecording() async {
         stopMeteringTimer()
+        stopLiveSpeechPreview(keepingText: true)
         guard let audioURL = audioRecorder.stopRecording() ?? activeAudioURL else {
             failMessage("No recording was available to process.")
             return
         }
         let recordingEngine = activeRecordingSTTEngine ?? selectedSTTEngine
         defer {
+            try? FileManager.default.removeItem(at: audioURL)
             activeRecordingSTTEngine = nil
             activeAudioURL = nil
             originalTarget = nil
@@ -1110,6 +1182,40 @@ final class AppState: ObservableObject {
         }
     }
 
+    func stopRecordingFromStatusModal() async {
+        guard stage == .recording else { return }
+        await stopAndProcessRecording()
+    }
+
+    func cancelRecordingFromStatusModal() {
+        cancelRecording()
+    }
+
+    func cancelRecording() {
+        guard stage == .recording else { return }
+
+        stopMeteringTimer()
+        stopLiveSpeechPreview(keepingText: false)
+        let audioURL = audioRecorder.stopRecording() ?? activeAudioURL
+        if let audioURL {
+            try? FileManager.default.removeItem(at: audioURL)
+        }
+
+        transcriptPreview = ""
+        polishedPreview = ""
+        errorMessage = nil
+        lastPasteStatus = nil
+        lastPasteFallbackReason = nil
+        activeRecordingSTTEngine = nil
+        activeAudioURL = nil
+        originalTarget = nil
+        stage = .idle
+        resetPushToTalkState()
+        recordingStatus = .idle
+        waveformLevels = Array(repeating: 4, count: 38)
+        pipelineLogger.info("Recording cancelled from status modal.")
+    }
+
     private func deliverRawTranscriptFallback(
         _ sttResult: STTResult,
         audioURL: URL,
@@ -1192,9 +1298,61 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func startLiveSpeechPreview() {
+        liveSpeechPreviewStartTask?.cancel()
+        liveSpeechPreviewStartTask = Task { [weak self] in
+            guard let self else { return }
+
+            do {
+                try await self.liveSpeechPreview.start(
+                    onUpdate: { [weak self] text, _ in
+                        Task { @MainActor [weak self] in
+                            guard let self, self.stage == .recording else { return }
+                            self.liveTranscriptPreview = text
+                            self.liveTranscriptUnavailableReason = nil
+                            self.recordingStatusPanel?.reposition()
+                        }
+                    },
+                    onError: { [weak self] message in
+                        Task { @MainActor [weak self] in
+                            guard let self, self.stage == .recording else { return }
+                            if self.liveTranscriptPreview.isEmpty {
+                                self.liveTranscriptUnavailableReason = Self.userFacingLivePreviewMessage(message)
+                                self.recordingStatusPanel?.reposition()
+                            }
+                        }
+                    }
+                )
+                guard self.stage == .recording else {
+                    self.liveSpeechPreview.stop()
+                    return
+                }
+            } catch is CancellationError {
+                self.liveSpeechPreview.stop()
+            } catch {
+                guard !Task.isCancelled else { return }
+                liveTranscriptUnavailableReason = Self.userFacingLivePreviewMessage(error.localizedDescription)
+                recordingStatusPanel?.reposition()
+                pipelineLogger.info("Live speech preview unavailable: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    private func stopLiveSpeechPreview(keepingText: Bool) {
+        liveSpeechPreviewStartTask?.cancel()
+        liveSpeechPreviewStartTask = nil
+        liveSpeechPreview.stop()
+        liveTranscriptUnavailableReason = nil
+        if !keepingText {
+            liveTranscriptPreview = ""
+        }
+    }
+
     private func finishNoSpeechRecording(audioURL: URL) {
         errorMessage = nil
         transcriptPreview = ""
+        liveTranscriptPreview = ""
+        liveTranscriptUnavailableReason = nil
         polishedPreview = ""
         lastPasteStatus = nil
         lastPasteFallbackReason = nil
@@ -1279,6 +1437,8 @@ final class AppState: ObservableObject {
     }
 
     private func failMessage(_ message: String) {
+        stopMeteringTimer()
+        stopLiveSpeechPreview(keepingText: false)
         errorMessage = message
         stage = .error
         resetPushToTalkState()
@@ -1417,6 +1577,21 @@ final class AppState: ObservableObject {
         return message
     }
 
+    private static func userFacingLivePreviewMessage(_ rawMessage: String) -> String {
+        let lowered = rawMessage.lowercased()
+
+        if lowered.contains("permission") || lowered.contains("authorization") || lowered.contains("denied") {
+            return "Speech recognition permission needed"
+        }
+        if lowered.contains("on-device") || lowered.contains("available on this mac") {
+            return "Live text unavailable on this Mac"
+        }
+        if lowered.contains("microphone") || lowered.contains("audio") || lowered.contains("input") {
+            return "Live text waiting for microphone audio"
+        }
+        return "Final text will appear after Stop"
+    }
+
     private static func userFacingInstallError(from rawMessage: String) -> String {
         let lowered = rawMessage.lowercased()
 
@@ -1516,7 +1691,10 @@ final class AppState: ObservableObject {
         case .idle:
             recordingStatusPanel?.orderOut(nil)
         case .recording, .processing, .retrying, .modelUnavailable, .noSpeechDetected, .pastedToField, .copiedToClipboard, .copiedRawTranscript:
-            showRecordingStatusPanelIfNeeded(allowsUserDismissal: newStatus == .modelUnavailable)
+            showRecordingStatusPanelIfNeeded(
+                allowsUserDismissal: newStatus == .modelUnavailable,
+                takesKeyFocus: newStatus == .recording
+            )
             recordingStatusPanel?.reposition()
 
             if newStatus == .pastedToField || newStatus == .copiedToClipboard || newStatus == .copiedRawTranscript || newStatus == .noSpeechDetected {
@@ -1531,7 +1709,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func showRecordingStatusPanelIfNeeded(allowsUserDismissal: Bool) {
+    private func showRecordingStatusPanelIfNeeded(allowsUserDismissal: Bool, takesKeyFocus: Bool) {
         if recordingStatusPanel == nil {
             recordingStatusPanel = RecordingStatusPanel(state: self) { [weak self] in
                 guard let self, self.recordingStatus == .modelUnavailable else { return }
@@ -1539,7 +1717,10 @@ final class AppState: ObservableObject {
             }
         }
 
-        recordingStatusPanel?.show(allowsUserDismissal: allowsUserDismissal)
+        recordingStatusPanel?.show(
+            allowsUserDismissal: allowsUserDismissal,
+            takesKeyFocus: takesKeyFocus
+        )
     }
 
     func openSettings() {

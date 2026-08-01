@@ -305,8 +305,10 @@ final class PureVoiceCoreTests: XCTestCase {
         um so can you please help me write a quick message to Jordan basically I need to ask whether the design review timeline is still Friday because if it slips then we are blocked and I want it to sound clear but not too formal
         """
         let client = AppleFoundationModelClient()
-        let polishPrompt = try XCTUnwrap(PersonaDefaults.defaultPersonas.first { $0.name == "Polish" }?.systemPrompt)
-        let briefPrompt = try XCTUnwrap(PersonaDefaults.defaultPersonas.first { $0.name == "Brief" }?.systemPrompt)
+        let polishDirective = try XCTUnwrap(PersonaDefaults.defaultPersonas.first { $0.name == "Polish" }?.systemPrompt)
+        let briefDirective = try XCTUnwrap(PersonaDefaults.defaultPersonas.first { $0.name == "Brief" }?.systemPrompt)
+        let polishPrompt = PersonaStore.promptWithGuardrail(polishDirective)
+        let briefPrompt = PersonaStore.promptWithGuardrail(briefDirective)
 
         let polish = try await client.polish(text: transcript, systemPrompt: polishPrompt)
         let brief = try await client.polish(text: transcript, systemPrompt: briefPrompt)

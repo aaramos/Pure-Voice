@@ -10,40 +10,42 @@ final class RecordingStatusPanel: NSPanel {
     init(state: AppState, onDismiss: @escaping @MainActor () -> Void) {
         self.hostingView = NSHostingView(rootView: AnyView(
             StatusModalView(state: state)
-                .environment(\.colorScheme, .dark)
+                .environment(\.colorScheme, .light)
         ))
         self.dismissAction = onDismiss
 
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 176),
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 264),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
 
-        level = .floating
+        level = .statusBar
+        isFloatingPanel = true
         becomesKeyOnlyIfNeeded = true
         isMovableByWindowBackground = false
-        hasShadow = false
+        hasShadow = true
         isOpaque = false
         backgroundColor = .clear
-        appearance = NSAppearance(named: .darkAqua)
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        appearance = NSAppearance(named: .aqua)
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        hidesOnDeactivate = false
 
         let containerView = NSView(frame: contentView?.bounds ?? .zero)
-        containerView.appearance = NSAppearance(named: .darkAqua)
+        containerView.appearance = NSAppearance(named: .aqua)
         containerView.autoresizingMask = [.width, .height]
         containerView.wantsLayer = true
-        containerView.layer?.backgroundColor = NSColor(calibratedWhite: 0.075, alpha: 1).cgColor
-        containerView.layer?.cornerRadius = 22
+        containerView.layer?.backgroundColor = NSColor(calibratedWhite: 0.88, alpha: 0.98).cgColor
+        containerView.layer?.cornerRadius = 42
         containerView.layer?.cornerCurve = .continuous
         containerView.layer?.masksToBounds = true
         containerView.layer?.borderWidth = 1
-        containerView.layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        containerView.layer?.borderColor = NSColor.black.withAlphaComponent(0.08).cgColor
 
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         hostingView.wantsLayer = true
-        hostingView.appearance = NSAppearance(named: .darkAqua)
+        hostingView.appearance = NSAppearance(named: .aqua)
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
 
         containerView.addSubview(hostingView)
@@ -57,26 +59,34 @@ final class RecordingStatusPanel: NSPanel {
         ])
     }
 
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    func show(allowsUserDismissal: Bool) {
+    func show(allowsUserDismissal: Bool, takesKeyFocus: Bool) {
+        level = .statusBar
         reposition()
         if allowsUserDismissal {
             installDismissMonitorsIfNeeded()
         } else {
             removeDismissMonitors()
         }
-        orderFrontRegardless()
+        if takesKeyFocus {
+            makeKeyAndOrderFront(nil)
+        } else {
+            if isKeyWindow {
+                resignKey()
+            }
+            orderFrontRegardless()
+        }
     }
 
     func reposition() {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         contentView?.layoutSubtreeIfNeeded()
 
-        let width: CGFloat = 420
+        let width: CGFloat = 860
         let fittingHeight = hostingView.fittingSize.height
-        let height = max(148, fittingHeight)
+        let height = max(236, fittingHeight)
         let visibleFrame = screen.visibleFrame
         let originX = visibleFrame.midX - width / 2
         let centerY = visibleFrame.maxY - visibleFrame.height * 0.45

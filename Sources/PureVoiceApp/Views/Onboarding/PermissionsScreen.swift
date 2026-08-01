@@ -4,6 +4,7 @@ import SwiftUI
 struct PermissionsScreen: View {
     @EnvironmentObject private var state: AppState
     @State private var microphoneStatus: OnboardingPermissionStatus = .pending
+    @State private var speechRecognitionStatus: OnboardingPermissionStatus = .pending
     @State private var accessibilityStatus: OnboardingPermissionStatus = .pending
     @State private var appleStatus: OnboardingPermissionStatus = .pending
     @State private var didStartChecks = false
@@ -31,6 +32,14 @@ struct PermissionsScreen: View {
                     status: accessibilityStatus,
                     actionTitle: "Open System Settings",
                     action: state.openAccessibilityPrivacySettings
+                )
+
+                PermissionRow(
+                    title: "Speech Recognition",
+                    detail: "Shows a live on-device transcript while you record. Optional - final transcription still works without it.",
+                    status: speechRecognitionStatus,
+                    actionTitle: "Open System Settings",
+                    action: state.openSpeechRecognitionPrivacySettings
                 )
 
                 PermissionRow(
@@ -88,10 +97,17 @@ struct PermissionsScreen: View {
             : .needsAttention("Microphone denied. Pure Voice needs microphone access to record.")
 
         guard microphoneGranted else {
+            speechRecognitionStatus = .pending
             accessibilityStatus = .pending
             appleStatus = .pending
             return
         }
+
+        speechRecognitionStatus = .checking("Requesting...")
+        let speechRecognitionGranted = await state.requestSpeechRecognitionPermissionForOnboarding()
+        speechRecognitionStatus = speechRecognitionGranted
+            ? .granted("Granted")
+            : .needsAttention("Speech Recognition denied. Live text will be unavailable, but final transcription will still work.")
 
         accessibilityStatus = .checking("Checking...")
         let accessibilityGranted = state.requestAccessibilityPermissionForOnboarding(prompt: true)

@@ -4,8 +4,8 @@ import SwiftUI
 enum InstallEstimates {
     static let whisperSize = "~140 MB"
     static let whisperTime = "~30 seconds"
-    static let parakeetSize = "~600 MB"
-    static let parakeetTime = "2-4 minutes"
+    static let parakeetSize = "~2.3 GB"
+    static let parakeetTime = "several minutes"
 }
 
 struct WelcomeView: View {

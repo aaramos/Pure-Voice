@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.1.7 - 2026-08-01
+
+- Added an on-device live transcript preview and expanded recording controls for Stop and Cancel.
+- Added the Speech Recognition usage description and onboarding permission flow required by the live preview.
+- Prevented Push to Talk from starting after its shortcut has already been released.
+- Prevented the status panel from reclaiming focus after output delivery.
+- Ensured temporary recordings are deleted after failed as well as successful processing attempts.
+- Corrected the Parakeet model download estimate and made live preview follow the user's current locale.
+- Strengthened the Brief persona and made its live behavior test use the same shared guardrail as production.
+
 ## v1.1.6 - 2026-05-19
 
 - Strengthened polishing instructions so question-like dictation is edited as copy, not answered as a chat prompt.
