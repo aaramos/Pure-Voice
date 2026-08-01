@@ -3,177 +3,167 @@ import SwiftUI
 struct StatusModalView: View {
     @ObservedObject var state: AppState
     @Environment(\.colorScheme) private var colorScheme
-    @State private var recordingDotVisible = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .center, spacing: 14) {
-                WaveformView(levels: state.waveformLevels, status: state.recordingStatus)
-                    .frame(width: 263, height: 60)
+        VStack(alignment: .leading, spacing: 18) {
+            waveformRow
+            transcriptText
+            controlBar
+        }
+        .padding(.horizontal, 34)
+        .padding(.top, 28)
+        .padding(.bottom, 22)
+        .frame(width: 860)
+    }
 
-                Spacer(minLength: 0)
+    private var waveformRow: some View {
+        HStack(alignment: .center, spacing: 16) {
+            WaveformView(levels: state.waveformLevels, status: state.recordingStatus)
+                .frame(maxWidth: .infinity)
+                .frame(height: 60)
 
-                Text(state.selectedPersona.name)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(.primary.opacity(colorScheme == .dark ? 0.10 : 0.07), in: Capsule())
+            if state.recordingStatus == .processing || isRetrying {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.secondary)
+                    .frame(width: 18, height: 18)
+            }
+        }
+        .frame(height: 62)
+    }
+
+    private var transcriptText: some View {
+        Text(state.statusModalTranscriptText)
+            .font(.system(size: 29, weight: .medium))
+            .lineSpacing(3)
+            .lineLimit(3)
+            .minimumScaleFactor(0.72)
+            .foregroundStyle(state.statusModalTranscriptIsPlaceholder ? .secondary : .primary)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+            .animation(.easeOut(duration: 0.16), value: state.statusModalTranscriptText)
+    }
+
+    private var controlBar: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "waveform")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 34, height: 34)
+
+            if let controlStatusText {
+                Text(controlStatusText)
+                    .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
             }
 
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 9) {
-                    statusGlyph
-                    Text(statusTitle)
-                        .font(.callout.weight(.semibold))
-                        .lineLimit(1)
-                }
-                .foregroundStyle(pillForeground)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(pillBackground, in: Capsule())
+            Spacer(minLength: 16)
 
-                if let subLabel {
-                    if state.recordingStatus == .modelUnavailable {
-                        Button {
-                            state.openSettings()
-                        } label: {
-                            Text(subLabel)
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(pillForeground)
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        Text(subLabel)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+            ControlTextButton("Stop", isEnabled: state.canStopFromStatusModal) {
+                Task { await state.stopRecordingFromStatusModal() }
+            }
+            .keyboardShortcut(.space, modifiers: [])
+
+            KeycapButton("Space", isEnabled: state.canStopFromStatusModal) {
+                Task { await state.stopRecordingFromStatusModal() }
+            }
+
+            ControlTextButton("Cancel", isEnabled: state.canCancelFromStatusModal) {
+                state.cancelRecordingFromStatusModal()
+            }
+            .keyboardShortcut(.escape, modifiers: [])
+
+            KeycapButton("esc", isEnabled: state.canCancelFromStatusModal) {
+                state.cancelRecordingFromStatusModal()
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 20)
-        .frame(width: 420)
-        .onAppear {
-            recordingDotVisible = false
-        }
+        .padding(.horizontal, 18)
+        .frame(height: 58)
+        .background(controlBarBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    @ViewBuilder
-    private var statusGlyph: some View {
+    private var isRetrying: Bool {
+        if case .retrying = state.recordingStatus {
+            return true
+        }
+        return false
+    }
+
+    private var controlStatusText: String? {
         switch state.recordingStatus {
         case .recording:
-            Circle()
-                .fill(pillForeground)
-                .frame(width: 8, height: 8)
-                .opacity(recordingDotVisible ? 1 : 0.28)
-                .animation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true), value: recordingDotVisible)
+            return nil
         case .processing:
-            ProgressView()
-                .controlSize(.small)
-                .tint(pillForeground)
-                .frame(width: 14, height: 14)
-        case .noSpeechDetected:
-            Image(systemName: "mic.slash.fill")
-        case .pastedToField:
-            Image(systemName: "checkmark.circle.fill")
-        case .copiedToClipboard, .copiedRawTranscript:
-            Image(systemName: "doc.on.doc.fill")
+            return "Transcribing"
         case .retrying:
-            Image(systemName: "exclamationmark.triangle.fill")
+            return "Retrying"
         case .modelUnavailable:
-            Image(systemName: "exclamationmark.circle.fill")
-        case .idle:
-            EmptyView()
-        }
-    }
-
-    private var statusTitle: String {
-        switch state.recordingStatus {
-        case .idle:
-            return ""
-        case .recording:
-            return "Recording — \(state.recordingInstructionText)"
-        case .processing:
-            return "Transcribing & refining…"
-        case .noSpeechDetected:
-            return "No speech detected"
-        case .pastedToField:
-            return "Pasted into field"
-        case .copiedToClipboard:
-            return "Copied to clipboard"
-        case .copiedRawTranscript:
-            return "Copied raw transcript"
-        case .retrying:
-            return "Model not ready — retrying…"
-        case .modelUnavailable:
-            return "Model unavailable"
-        }
-    }
-
-    private var subLabel: String? {
-        switch state.recordingStatus {
-        case .noSpeechDetected:
-            return "Nothing was pasted; dismisses in 2s"
-        case .pastedToField, .copiedToClipboard:
-            return "Dismisses in 2s"
-        case .copiedRawTranscript:
-            return "Polishing failed; dismisses in 2s"
-        case .retrying(let attempt):
-            return "Retry \(attempt) of 2"
-        case .modelUnavailable:
-            return "Open settings ↗"
-        case .idle, .recording, .processing:
+            return "Open settings"
+        case .noSpeechDetected, .pastedToField, .copiedToClipboard, .copiedRawTranscript, .idle:
             return nil
         }
     }
 
-    private var pillBackground: Color {
-        switch state.recordingStatus {
-        case .recording:
-            return colorScheme == .dark ? Color(hex: 0x7C3AED).opacity(0.28) : Color(hex: 0xF5F3FF)
-        case .processing:
-            return colorScheme == .dark ? Color(hex: 0xF59E0B).opacity(0.24) : Color(hex: 0xFFFBEB)
-        case .noSpeechDetected:
-            return colorScheme == .dark ? Color(hex: 0x64748B).opacity(0.24) : Color(hex: 0xF1F5F9)
-        case .pastedToField:
-            return colorScheme == .dark ? Color(hex: 0x65A30D).opacity(0.24) : Color(hex: 0xF0FDF4)
-        case .copiedToClipboard, .copiedRawTranscript:
-            return colorScheme == .dark ? Color(hex: 0x2563EB).opacity(0.24) : Color(hex: 0xEFF6FF)
-        case .retrying, .modelUnavailable:
-            return colorScheme == .dark ? Color(hex: 0xEF4444).opacity(0.24) : Color(hex: 0xFEF2F2)
-        case .idle:
-            return .clear
-        }
-    }
-
-    private var pillForeground: Color {
-        switch state.recordingStatus {
-        case .recording:
-            return colorScheme == .dark ? Color(hex: 0xC4B8FF) : Color(hex: 0x5B21B6)
-        case .processing:
-            return colorScheme == .dark ? Color(hex: 0xFAC775) : Color(hex: 0x92400E)
-        case .noSpeechDetected:
-            return colorScheme == .dark ? Color(hex: 0xCBD5E1) : Color(hex: 0x475569)
-        case .pastedToField:
-            return colorScheme == .dark ? Color(hex: 0x97C459) : Color(hex: 0x166534)
-        case .copiedToClipboard, .copiedRawTranscript:
-            return colorScheme == .dark ? Color(hex: 0x85B7EB) : Color(hex: 0x1D4ED8)
-        case .retrying, .modelUnavailable:
-            return colorScheme == .dark ? Color(hex: 0xF09595) : Color(hex: 0x991B1B)
-        case .idle:
-            return .secondary
-        }
+    private var controlBarBackground: Color {
+        colorScheme == .dark ? Color.white.opacity(0.72) : Color.white.opacity(0.78)
     }
 }
 
-private extension Color {
-    init(hex: UInt32) {
-        self.init(
-            red: Double((hex >> 16) & 0xFF) / 255,
-            green: Double((hex >> 8) & 0xFF) / 255,
-            blue: Double(hex & 0xFF) / 255
-        )
+private struct ControlTextButton: View {
+    var title: String
+    var isEnabled: Bool
+    var action: () -> Void
+
+    init(_ title: String, isEnabled: Bool, action: @escaping () -> Void) {
+        self.title = title
+        self.isEnabled = isEnabled
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 25, weight: .medium))
+                .foregroundStyle(isEnabled ? Color.primary : Color.secondary.opacity(0.55))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .frame(minWidth: 68, minHeight: 40)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+    }
+}
+
+private struct KeycapButton: View {
+    var title: String
+    var isEnabled: Bool
+    var action: () -> Void
+
+    init(_ title: String, isEnabled: Bool, action: @escaping () -> Void) {
+        self.title = title
+        self.isEnabled = isEnabled
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(isEnabled ? Color.primary : Color.secondary.opacity(0.48))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .padding(.horizontal, title.count > 3 ? 13 : 10)
+                .frame(minHeight: 38)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.primary.opacity(isEnabled ? 0.075 : 0.04))
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
     }
 }
